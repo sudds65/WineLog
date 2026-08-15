@@ -311,6 +311,24 @@ chmod 0755 /usr/local/bin/winelog
 # report itself as the conflict.
 systemctl stop winelog >/dev/null 2>&1 || true
 
+# A WineLog started by hand — an earlier `uvicorn ...` or `python -m app.serve`
+# in a shell — is invisible to systemd, so stopping the service leaves it
+# serving the old code on its old port. Find it before it confuses everyone.
+strays() {
+  local main_pid
+  main_pid="$(systemctl show -p MainPID --value winelog 2>/dev/null || true)"
+  pgrep -f 'app\.serve|app\.main:app' 2>/dev/null \
+    | grep -v -x -e "${main_pid:-0}" -e "$$" || true
+}
+
+STRAY_PIDS="$(strays | tr '\n' ' ')"
+if [[ -n "${STRAY_PIDS// /}" ]]; then
+  warn "Another WineLog is running outside systemd (PID ${STRAY_PIDS% })."
+  warn "It was started by hand, so it keeps serving the old code on its own"
+  warn "port and this install will not replace it. Stop it with:"
+  warn "    sudo kill ${STRAY_PIDS% }"
+fi
+
 port_holder() {  # the program listening on a TCP port, if any
   # A free port means grep matches nothing, which under `set -o pipefail` is a
   # failed pipeline — hence the || true, or the common case aborts the install.

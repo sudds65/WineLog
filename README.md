@@ -336,7 +336,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-108 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
+110 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
 line maths), API (auth, breakeven arithmetic, receipt de-duplication, search,
 insights, CSV export), serving (TLS arguments, certificate checks, the
 HTTP→HTTPS redirect, cookie policy), certificates (validation, hostname

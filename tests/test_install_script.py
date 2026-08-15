@@ -109,6 +109,30 @@ def test_an_empty_name_is_skipped_without_aborting():
     assert sans_for("", "winelog") == "DNS:winelog"
 
 
+def test_strays_is_quiet_when_nothing_else_is_running():
+    """Runs on every install, including boxes with no systemctl at all."""
+    result = run_bash(
+        "systemctl() { return 127; }\n"
+        'pgrep() { return 1; }\n'
+        + extract("strays")
+        + '\nout="$(strays)"\necho "[$out]"'
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[]"
+
+
+def test_strays_reports_a_hand_started_winelog():
+    """The service PID is systemd's; anything else is someone's stray shell."""
+    result = run_bash(
+        "systemctl() { echo 111; }\n"
+        "pgrep() { printf '111\\n222\\n'; }\n"
+        + extract("strays")
+        + "\nstrays"
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["222"]
+
+
 def test_help_lists_the_tls_options():
     result = subprocess.run(
         ["bash", str(INSTALLER), "--help"], capture_output=True, text=True, timeout=30
