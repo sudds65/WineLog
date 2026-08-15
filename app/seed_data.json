@@ -1,0 +1,47 @@
+{
+  "_comment": "Receipt-level seed data. Loaded by: python manage.py seed. Each entry is one visit with its real line items; only lines with the founders discount count toward breakeven. Add more receipts by uploading the PDF in the web app, or with: python manage.py import <file.pdf>",
+  "receipts": [
+    {
+      "receipt_no": "XzEm",
+      "purchased_on": "2026-08-09",
+      "purchased_at": "2026-08-09T14:14",
+      "merchant": "Obscure Wine Co. Aurburndale",
+      "subtotal_cents": 5350,
+      "tax_cents": 374,
+      "tip_cents": 1145,
+      "total_cents": 6869,
+      "items": [
+        {
+          "description": "3 Cheeses & 2 Meats",
+          "detail": "bresaola, Served with accoutrements, Karst Vermont, Usa 4 Oz Cow - Sweet and Nutty Cave Aged, Cheddar & Gruyere Blend, Snow Camp, Schellen Bell Alpine \u2013 Switzerland, Unpasteurized 6 Oz Cow,, Rich, Cave-aged 10 Months, with Notes of Hazelnuts and, Salted Butterscotch, Iberico Salchichon",
+          "category": "other",
+          "serving": null,
+          "reg_price_cents": 3800,
+          "discount_cents": 0,
+          "paid_cents": 3800,
+          "qualifying": false
+        },
+        {
+          "description": "2022 Nebel Riesling",
+          "detail": "Grmany, Rheinhessen, Glass",
+          "category": "wine",
+          "serving": "Glass",
+          "reg_price_cents": 1100,
+          "discount_cents": 550,
+          "paid_cents": 550,
+          "qualifying": true
+        },
+        {
+          "description": "2022 Bava Ruche Monferrato",
+          "detail": "Italy, Piedmont, Glass",
+          "category": "wine",
+          "serving": "Glass",
+          "reg_price_cents": 2000,
+          "discount_cents": 1000,
+          "paid_cents": 1000,
+          "qualifying": true
+        }
+      ]
+    }
+  ]
+}

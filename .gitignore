@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Local database and uploaded receipts — never commit these
+data/
+*.db
+*.db-wal
+*.db-shm
+uploads/
+
+.env
+.DS_Store

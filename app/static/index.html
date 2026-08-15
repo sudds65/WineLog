@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#8f1d3f" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#151412" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="WineLog">
+<title>WineLog</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🍷</text></svg>">
+</head>
+<body>
+
+<!-- ── Login ──────────────────────────────────────────────────────────── -->
+<div id="login" class="login" hidden>
+  <form class="login__card" id="login-form" autocomplete="on">
+    <div class="login__mark" aria-hidden="true">🍷</div>
+    <h1 class="login__title">WineLog</h1>
+    <p class="login__sub">Obscure Wine Co. membership tracker</p>
+    <label class="field">
+      <span class="field__label">Username</span>
+      <input class="input" type="text" name="username" id="login-username"
+             autocomplete="username" autocapitalize="none" autocorrect="off" required>
+    </label>
+    <label class="field">
+      <span class="field__label">Password</span>
+      <input class="input" type="password" name="password" id="login-password"
+             autocomplete="current-password" required>
+    </label>
+    <p class="alert alert--error" id="login-error" hidden role="alert"></p>
+    <button class="btn btn--primary btn--block" type="submit" id="login-submit">Sign in</button>
+    <p class="login__note">Available on the home network / VPN only.</p>
+  </form>
+</div>
+
+<!-- ── App shell ──────────────────────────────────────────────────────── -->
+<div id="app" class="app" hidden>
+
+  <header class="topbar">
+    <div class="topbar__brand"><span aria-hidden="true">🍷</span> WineLog</div>
+    <div class="topbar__right">
+      <span class="topbar__user" id="topbar-user"></span>
+      <button class="btn btn--ghost btn--sm" id="logout-btn" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <nav class="sidenav" aria-label="Main">
+    <div class="sidenav__brand"><span aria-hidden="true">🍷</span> WineLog</div>
+    <a class="navlink" href="#/dashboard" data-view="dashboard">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h4v8H3zM10 3h4v18h-4zM17 9h4v12h-4z"/></svg>
+      <span>Dashboard</span>
+    </a>
+    <a class="navlink" href="#/log" data-view="log">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v3H4zM4 10h16v3H4zM4 16h10v3H4z"/></svg>
+      <span>Purchases</span>
+    </a>
+    <a class="navlink" href="#/add" data-view="add">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v16h-2z"/><path d="M4 11h16v2H4z"/></svg>
+      <span>Add</span>
+    </a>
+    <a class="navlink" href="#/search" data-view="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 3a7 7 0 105.3 11.6l4.6 4.6 1.4-1.4-4.6-4.6A7 7 0 0010 3zm0 2a5 5 0 110 10 5 5 0 010-10z"/></svg>
+      <span>Search</span>
+    </a>
+    <a class="navlink" href="#/settings" data-view="settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zm0 2a2 2 0 110 4 2 2 0 010-4z"/><path d="M11 2h2l.4 2.3 1.9.8 1.9-1.4 1.4 1.4-1.4 1.9.8 1.9L20 9v2l-2.3.4-.8 1.9 1.4 1.9-1.4 1.4-1.9-1.4-1.9.8L13 22h-2l-.4-2.3-1.9-.8-1.9 1.4-1.4-1.4 1.4-1.9-.8-1.9L4 13v-2l2.3-.4.8-1.9L5.7 6.8l1.4-1.4 1.9 1.4 1.9-.8z" opacity=".55"/></svg>
+      <span>Settings</span>
+    </a>
+    <div class="sidenav__foot">
+      <span class="sidenav__user" id="sidenav-user"></span>
+      <button class="btn btn--ghost btn--sm" id="logout-btn-desktop" type="button">Sign out</button>
+    </div>
+  </nav>
+
+  <main class="main" id="main">
+
+    <!-- Dashboard -->
+    <section class="view" data-view="dashboard" hidden>
+      <div class="view__head">
+        <h1 class="view__title">Breakeven</h1>
+        <p class="view__sub" id="dash-sub"></p>
+      </div>
+
+      <div class="dashgrid">
+        <section class="card card--hero" aria-labelledby="hero-label">
+          <h2 class="card__label" id="hero-label">Saved so far</h2>
+          <p class="hero__value" id="hero-saved">—</p>
+          <p class="hero__of">of <span id="hero-target">—</span> membership cost</p>
+
+          <div class="meter" role="img" id="meter-figure" aria-label="Progress toward breakeven">
+            <div class="meter__track"><div class="meter__fill" id="meter-fill"></div></div>
+            <div class="meter__scale">
+              <span id="meter-percent">0%</span>
+              <span id="meter-remaining"></span>
+            </div>
+          </div>
+
+          <p class="pace" id="pace-note"></p>
+        </section>
+
+        <section class="card tiles" aria-label="Summary">
+          <div class="tile">
+            <span class="tile__label">Visits</span>
+            <span class="tile__value" id="stat-visits">—</span>
+            <span class="tile__note" id="stat-items"></span>
+          </div>
+          <div class="tile">
+            <span class="tile__label">Avg saved / visit</span>
+            <span class="tile__value" id="stat-avg">—</span>
+            <span class="tile__note" id="stat-spend"></span>
+          </div>
+          <div class="tile">
+            <span class="tile__label">Projected breakeven</span>
+            <span class="tile__value" id="stat-projected">—</span>
+            <span class="tile__note" id="stat-projected-note"></span>
+          </div>
+          <div class="tile">
+            <span class="tile__label">Membership ends</span>
+            <span class="tile__value" id="stat-termend">—</span>
+            <span class="tile__note" id="stat-daysleft"></span>
+          </div>
+        </section>
+
+        <section class="card card--chart" aria-labelledby="chart-label">
+          <div class="card__head">
+            <h2 class="card__label" id="chart-label">Cumulative savings</h2>
+            <button class="btn btn--ghost btn--sm" id="chart-table-toggle" type="button"
+                    aria-expanded="false">Table</button>
+          </div>
+          <div class="chart" id="chart"></div>
+          <div class="chart__legend">
+            <span class="swatch swatch--series" aria-hidden="true"></span> What you've saved
+            <span class="swatch swatch--pace" aria-hidden="true"></span> Even pace to breakeven
+          </div>
+          <div id="chart-table" hidden></div>
+        </section>
+
+        <section class="card" aria-labelledby="split-label">
+          <h2 class="card__label" id="split-label">Where the savings come from</h2>
+          <div id="category-split"></div>
+        </section>
+
+        <section class="card card--wide" aria-labelledby="recent-label">
+          <div class="card__head">
+            <h2 class="card__label" id="recent-label">Recent purchases</h2>
+            <a class="btn btn--ghost btn--sm" href="#/log">See all</a>
+          </div>
+          <div id="recent-list"></div>
+        </section>
+      </div>
+    </section>
+
+    <!-- Purchases -->
+    <section class="view" data-view="log" hidden>
+      <div class="view__head">
+        <h1 class="view__title">Purchases</h1>
+        <p class="view__sub" id="log-sub"></p>
+      </div>
+      <div class="card">
+        <div id="log-list"></div>
+      </div>
+      <p class="footnote">
+        Only lines carrying <code>Discount: founders (50%)</code> count toward breakeven.
+        Food and undiscounted items are kept on the receipt for reference.
+      </p>
+    </section>
+
+    <!-- Add -->
+    <section class="view" data-view="add" hidden>
+      <div class="view__head">
+        <h1 class="view__title">Add a purchase</h1>
+        <p class="view__sub">Upload the Square receipt, or type it in.</p>
+      </div>
+
+      <div class="segmented" role="tablist" aria-label="How to add">
+        <button class="segmented__btn is-active" role="tab" aria-selected="true"
+                data-pane="upload" type="button">Upload receipt</button>
+        <button class="segmented__btn" role="tab" aria-selected="false"
+                data-pane="manual" type="button">Enter manually</button>
+      </div>
+
+      <div class="card pane" data-pane="upload">
+        <div class="drop" id="drop">
+          <input type="file" id="file-input" accept="application/pdf,.pdf" hidden>
+          <svg class="drop__icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3l5 5h-3v6h-4V8H7l5-5z"/><path d="M5 18h14v2H5z"/>
+          </svg>
+          <p class="drop__title">Drop the receipt PDF here</p>
+          <p class="drop__sub">or</p>
+          <button class="btn btn--primary" id="choose-file" type="button">Choose a PDF</button>
+          <p class="drop__hint">
+            In Gmail, open the receipt → Print → Save as PDF.
+          </p>
+        </div>
+        <p class="alert alert--error" id="upload-error" hidden role="alert"></p>
+        <div id="review" hidden></div>
+      </div>
+
+      <div class="card pane" data-pane="manual" hidden>
+        <form id="manual-form" class="form">
+          <div class="form__row">
+            <label class="field">
+              <span class="field__label">Date</span>
+              <input class="input" type="date" name="purchased_on" id="manual-date" required>
+            </label>
+            <label class="field">
+              <span class="field__label">Type</span>
+              <select class="input" name="category" id="manual-category">
+                <option value="wine">Wine</option>
+                <option value="beer">Beer</option>
+              </select>
+            </label>
+          </div>
+          <label class="field">
+            <span class="field__label">What did you get?</span>
+            <input class="input" type="text" name="description" id="manual-description"
+                   placeholder="e.g. Two glasses of Riesling" maxlength="200" required>
+          </label>
+          <div class="form__row">
+            <label class="field">
+              <span class="field__label">Full price, before the discount</span>
+              <div class="input-money">
+                <span aria-hidden="true">$</span>
+                <input class="input" type="text" inputmode="decimal" name="pre_discount"
+                       id="manual-amount" placeholder="31.00" required>
+              </div>
+            </label>
+            <label class="field">
+              <span class="field__label">Member discount</span>
+              <div class="input-money input-money--suffix">
+                <input class="input" type="number" name="discount_percent" id="manual-percent"
+                       value="50" min="0" max="100" step="1">
+                <span aria-hidden="true">%</span>
+              </div>
+            </label>
+          </div>
+          <p class="hint" id="manual-preview">Enter the pre-discount price to see the saving.</p>
+          <p class="alert alert--error" id="manual-error" hidden role="alert"></p>
+          <button class="btn btn--primary btn--block" type="submit">Log purchase</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Search -->
+    <section class="view" data-view="search" hidden>
+      <div class="view__head">
+        <h1 class="view__title">Search &amp; insights</h1>
+        <p class="view__sub">Ask the log what you've been drinking.</p>
+      </div>
+
+      <div class="card">
+        <div class="searchbar">
+          <svg class="searchbar__icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M10 3a7 7 0 105.3 11.6l4.6 4.6 1.4-1.4-4.6-4.6A7 7 0 0010 3zm0 2a5 5 0 110 10 5 5 0 010-10z"/>
+          </svg>
+          <input class="input searchbar__input" type="search" id="search-q"
+                 placeholder="Riesling, bottle, beer…" autocomplete="off"
+                 aria-label="Search purchases">
+        </div>
+        <div class="filters">
+          <label class="field field--inline">
+            <span class="field__label">From</span>
+            <input class="input" type="date" id="search-from">
+          </label>
+          <label class="field field--inline">
+            <span class="field__label">To</span>
+            <input class="input" type="date" id="search-to">
+          </label>
+          <label class="field field--inline">
+            <span class="field__label">Type</span>
+            <select class="input" id="search-category">
+              <option value="">All</option>
+              <option value="wine">Wine</option>
+              <option value="beer">Beer</option>
+            </select>
+          </label>
+          <label class="field field--inline">
+            <span class="field__label">Sort by</span>
+            <select class="input" id="search-sort">
+              <option value="date">Newest</option>
+              <option value="price">Highest price</option>
+              <option value="saved">Biggest saving</option>
+              <option value="name">Name</option>
+            </select>
+          </label>
+          <label class="checkline">
+            <input type="checkbox" id="search-include-all">
+            <span>Include food &amp; non-discounted lines</span>
+          </label>
+        </div>
+        <p class="search__summary" id="search-summary"></p>
+        <div id="search-results"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__label">Highlights</h2>
+          <div class="segmented segmented--sm" role="tablist" aria-label="Period">
+            <button class="segmented__btn is-active" role="tab" aria-selected="true"
+                    data-period="year" type="button">This year</button>
+            <button class="segmented__btn" role="tab" aria-selected="false"
+                    data-period="term" type="button">Membership</button>
+            <button class="segmented__btn" role="tab" aria-selected="false"
+                    data-period="all" type="button">All time</button>
+          </div>
+        </div>
+        <div id="insights"></div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section class="view" data-view="settings" hidden>
+      <div class="view__head">
+        <h1 class="view__title">Settings</h1>
+        <p class="view__sub">What breakeven means and when the clock runs out.</p>
+      </div>
+
+      <div class="card">
+        <h2 class="card__label">Membership</h2>
+        <form id="settings-form" class="form">
+          <div class="form__row">
+            <label class="field">
+              <span class="field__label">Membership fee</span>
+              <div class="input-money">
+                <span aria-hidden="true">$</span>
+                <input class="input" type="text" inputmode="decimal" id="set-fee">
+              </div>
+            </label>
+            <label class="field">
+              <span class="field__label">Tax paid on the fee</span>
+              <div class="input-money">
+                <span aria-hidden="true">$</span>
+                <input class="input" type="text" inputmode="decimal" id="set-tax">
+              </div>
+            </label>
+          </div>
+          <p class="hint" id="target-preview"></p>
+          <div class="form__row">
+            <label class="field">
+              <span class="field__label">Membership starts</span>
+              <input class="input" type="date" id="set-start">
+            </label>
+            <label class="field">
+              <span class="field__label">Membership ends</span>
+              <input class="input" type="date" id="set-end">
+            </label>
+          </div>
+          <div class="form__row">
+            <label class="field">
+              <span class="field__label">Default discount</span>
+              <div class="input-money input-money--suffix">
+                <input class="input" type="number" id="set-discount" min="0" max="100" step="1">
+                <span aria-hidden="true">%</span>
+              </div>
+            </label>
+            <label class="field">
+              <span class="field__label">Membership name</span>
+              <input class="input" type="text" id="set-name" maxlength="120">
+            </label>
+          </div>
+          <p class="alert alert--error" id="settings-error" hidden role="alert"></p>
+          <p class="alert alert--ok" id="settings-ok" hidden role="status"></p>
+          <button class="btn btn--primary" type="submit">Save settings</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2 class="card__label">Your data</h2>
+        <p class="muted">Everything lives in one SQLite file on the server.</p>
+        <a class="btn btn--ghost" id="export-btn" href="/api/export.csv">Export CSV</a>
+      </div>
+
+      <div class="card">
+        <h2 class="card__label">Change password</h2>
+        <form id="password-form" class="form">
+          <label class="field">
+            <span class="field__label">Current password</span>
+            <input class="input" type="password" id="pw-current" autocomplete="current-password" required>
+          </label>
+          <label class="field">
+            <span class="field__label">New password (10+ characters)</span>
+            <input class="input" type="password" id="pw-new" autocomplete="new-password"
+                   minlength="10" required>
+          </label>
+          <p class="alert alert--error" id="pw-error" hidden role="alert"></p>
+          <button class="btn btn--ghost" type="submit">Change password</button>
+        </form>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="tabbar" aria-label="Main">
+    <a class="tab" href="#/dashboard" data-view="dashboard">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h4v8H3zM10 3h4v18h-4zM17 9h4v12h-4z"/></svg>
+      <span>Home</span>
+    </a>
+    <a class="tab" href="#/log" data-view="log">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v3H4zM4 10h16v3H4zM4 16h10v3H4z"/></svg>
+      <span>Log</span>
+    </a>
+    <a class="tab tab--accent" href="#/add" data-view="add">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v16h-2z"/><path d="M4 11h16v2H4z"/></svg>
+      <span>Add</span>
+    </a>
+    <a class="tab" href="#/search" data-view="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 3a7 7 0 105.3 11.6l4.6 4.6 1.4-1.4-4.6-4.6A7 7 0 0010 3zm0 2a5 5 0 110 10 5 5 0 010-10z"/></svg>
+      <span>Search</span>
+    </a>
+    <a class="tab" href="#/settings" data-view="settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zm0 2a2 2 0 110 4 2 2 0 010-4z"/><path d="M11 2h2l.4 2.3 1.9.8 1.9-1.4 1.4 1.4-1.4 1.9.8 1.9L20 9v2l-2.3.4-.8 1.9 1.4 1.9-1.4 1.4-1.9-1.4-1.9.8L13 22h-2l-.4-2.3-1.9-.8-1.9 1.4-1.4-1.4 1.4-1.9-.8-1.9L4 13v-2l2.3-.4.8-1.9L5.7 6.8l1.4-1.4 1.9 1.4 1.9-.8z" opacity=".55"/></svg>
+      <span>More</span>
+    </a>
+  </nav>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

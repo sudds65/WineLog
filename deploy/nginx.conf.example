@@ -1,0 +1,43 @@
+# WineLog behind nginx, reachable only from the VPN / LAN.
+#
+#   sudo cp nginx.conf.example /etc/nginx/sites-available/winelog
+#   sudo ln -s /etc/nginx/sites-available/winelog /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+
+server {
+    listen 80;
+    # listen 443 ssl http2;   # see the TLS block below
+    server_name winelog.home.lan;
+
+    # Only the VPN and LAN ranges get in. Adjust to your subnets.
+    allow 10.0.0.0/8;
+    allow 172.16.0.0/12;
+    allow 192.168.0.0/16;
+    deny  all;
+
+    # Receipt PDFs are small; this is generous.
+    client_max_body_size 12m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8071;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+}
+
+# Serving over TLS (recommended — then set WINELOG_COOKIE_SECURE=true):
+#
+# server {
+#     listen 443 ssl http2;
+#     server_name winelog.home.lan;
+#
+#     ssl_certificate     /etc/ssl/winelog/fullchain.pem;
+#     ssl_certificate_key /etc/ssl/winelog/privkey.pem;
+#     ssl_protocols TLSv1.2 TLSv1.3;
+#
+#     ... same allow/deny and location block as above ...
+# }

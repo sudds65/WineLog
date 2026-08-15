@@ -1,0 +1,38 @@
+[Unit]
+Description=WineLog — Obscure Wine Co. membership breakeven tracker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=winelog
+Group=winelog
+WorkingDirectory=/opt/winelog
+
+# Bind to the LAN/VPN interface only. 127.0.0.1 if you front it with nginx;
+# 0.0.0.0 only when the host itself is firewalled to the VPN.
+Environment=WINELOG_DATA_DIR=/var/lib/winelog
+# Set to true once the app is served over HTTPS.
+Environment=WINELOG_COOKIE_SECURE=false
+ExecStart=/opt/winelog/.venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 --port 8071 --proxy-headers --forwarded-allow-ips='127.0.0.1'
+
+Restart=on-failure
+RestartSec=5
+
+# Hardening — the app only ever needs to write its own data directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/winelog
+
+[Install]
+WantedBy=multi-user.target
