@@ -128,6 +128,10 @@ from a shell:
 sudo winelog tls                          # what's being served, and until when
 sudo winelog tls fullchain.pem key.pem    # install; restart to pick it up
 sudo winelog tls --remove                 # drop back to winelog.env, or to HTTP
+
+# ask your own CA for one — the request carries every name, which is the only
+# place a Windows CA (AD CS) will read them from
+sudo winelog tls --csr winelog.home.lan --san winelog --san 192.168.1.50
 ```
 
 **Name the certificate for every address you'll use.** A browser checks the
@@ -306,6 +310,7 @@ import <pdf|dir> [...]     ingest receipts (--dry-run to preview)
 config [--set KEY=VALUE]   show or change settings
 tls [<cert> [<key>]]      show the HTTPS certificate, or install one
 tls --remove              delete the uploaded certificate
+tls --csr NAME [--san N]  generate a key and a signing request for your CA
 stats                      breakeven summary in the terminal
 ```
 
@@ -336,7 +341,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-110 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
+114 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
 line maths), API (auth, breakeven arithmetic, receipt de-duplication, search,
 insights, CSV export), serving (TLS arguments, certificate checks, the
 HTTP→HTTPS redirect, cookie policy), certificates (validation, hostname

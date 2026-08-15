@@ -299,8 +299,38 @@ def cmd_config(args: argparse.Namespace) -> None:
 
 
 def cmd_tls(args: argparse.Namespace) -> None:
-    """Show the certificate being served, or install one from a file."""
+    """Show the certificate being served, install one, or request one."""
     from app import tls
+
+    if args.csr:
+        out_dir = Path(args.out) if args.out else tls.uploaded_pair()[0].parent
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            sys.exit(f"Cannot write to {out_dir}: {exc}")
+
+        csr_pem, key_pem = tls.make_request(args.csr, args.san or [])
+        csr_path = out_dir / f"{args.csr.split('.')[0]}.csr"
+        key_path = out_dir / f"{args.csr.split('.')[0]}.key"
+        try:
+            key_path.write_bytes(key_pem)
+            key_path.chmod(0o600)
+            csr_path.write_bytes(csr_pem)
+        except OSError as exc:
+            sys.exit(f"Cannot write to {out_dir}: {exc}")
+
+        names = ", ".join([args.csr] + [n for n in (args.san or []) if n != args.csr])
+        print(f"Request for {args.csr}")
+        print(f"  covering  {names}")
+        print(f"  key       {key_path}   (stays here — never send it to the CA)")
+        print(f"  request   {csr_path}")
+        print("\nPaste this into your CA, or hand it the .csr file:\n")
+        print(csr_pem.decode().strip())
+        print(
+            f"\nWhen the signed certificate comes back:"
+            f"\n  {_cli_name()} tls <the-certificate>.crt {key_path}"
+        )
+        return
 
     if args.remove:
         cert_path, key_path = tls.uploaded_pair()
@@ -416,6 +446,15 @@ def main() -> None:
         "--remove", action="store_true",
         help="delete the uploaded certificate and fall back to winelog.env",
     )
+    p.add_argument(
+        "--csr", metavar="NAME",
+        help="generate a private key and a signing request for NAME",
+    )
+    p.add_argument(
+        "--san", action="append", metavar="NAME",
+        help="another name or IP the request should cover (repeatable)",
+    )
+    p.add_argument("--out", metavar="DIR", help="where to write them [the data directory]")
     p.set_defaults(func=cmd_tls)
 
     sub.add_parser("stats").set_defaults(func=cmd_stats)

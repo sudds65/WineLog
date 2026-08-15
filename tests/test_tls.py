@@ -273,6 +273,73 @@ def test_a_failed_rebind_puts_the_old_certificate_back(monkeypatch):
     assert tls.load(tls.uploaded_pair()[0]).subject.rfc4514_string() == "CN=working"
 
 
+# ── requesting one from a CA ──────────────────────────────────────────
+
+
+def test_a_request_carries_every_name_the_server_answers_to():
+    """AD CS only reads SANs from inside the request, so they must be there."""
+    csr_pem, key_pem = tls.make_request(
+        "winelog.suddarth.local", ["winelog", "winelog.local", "192.168.86.150"]
+    )
+    request = x509.load_pem_x509_csr(csr_pem)
+    assert request.is_signature_valid
+    assert tls._common_name(request.subject) == "winelog.suddarth.local"
+
+    san = request.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    assert san.get_values_for_type(x509.DNSName) == [
+        "winelog.suddarth.local", "winelog", "winelog.local",
+    ]
+    assert [str(ip) for ip in san.get_values_for_type(x509.IPAddress)] == ["192.168.86.150"]
+
+    # The key is usable and unencrypted, so the service can start unattended.
+    assert serialization.load_pem_private_key(key_pem, password=None)
+
+
+def test_a_request_does_not_repeat_the_common_name():
+    csr_pem, _ = tls.make_request("winelog", ["winelog"])
+    san = x509.load_pem_x509_csr(csr_pem).extensions.get_extension_for_class(
+        x509.SubjectAlternativeName
+    ).value
+    assert san.get_values_for_type(x509.DNSName) == ["winelog"]
+
+
+def test_a_signed_request_comes_back_installable():
+    """The whole round trip: request, sign it as a CA would, install it."""
+    csr_pem, key_pem = tls.make_request("winelog.suddarth.local", ["192.168.86.150"])
+    request = x509.load_pem_x509_csr(csr_pem)
+
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Windows Issuing CA")])
+    now = datetime.now(timezone.utc)
+    issued = (
+        x509.CertificateBuilder()
+        .subject_name(request.subject)
+        .issuer_name(ca_name)
+        .public_key(request.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=397))
+        .add_extension(
+            request.extensions.get_extension_for_class(x509.SubjectAlternativeName).value,
+            critical=False,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+    cert_pem = issued.public_bytes(serialization.Encoding.PEM)
+
+    result = tls.install(cert_pem, key_pem)
+    assert result["certificate"]["issuer"] == "Windows Issuing CA"
+    assert "192.168.86.150" in result["certificate"]["names"]
+
+
+def test_a_chain_led_by_the_ca_certificate_is_named_as_such():
+    """Some CA exports put the issuer first, which OpenSSL would reject."""
+    ca_cert, ca_key = make_cert(common_name="Issuing CA")
+    leaf_cert, leaf_key = make_cert(common_name="winelog")
+    with pytest.raises(tls.CertificateError, match="starts with the CA"):
+        tls.validate(ca_cert + leaf_cert, leaf_key)
+
+
 # ── the API ───────────────────────────────────────────────────────────
 
 

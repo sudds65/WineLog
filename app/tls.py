@@ -21,6 +21,7 @@ from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from . import config
 
@@ -198,6 +199,19 @@ def _first_certificate(pem: bytes) -> x509.Certificate:
         ) from exc
 
 
+def _certificates_in(pem: bytes) -> list[x509.Certificate]:
+    """Every certificate in a PEM bundle, in the order they appear."""
+    marker = b"-----BEGIN CERTIFICATE-----"
+    blocks = [marker + part for part in pem.split(marker)[1:]]
+    found = []
+    for block in blocks:
+        try:
+            found.append(x509.load_pem_x509_certificate(block))
+        except Exception:
+            continue
+    return found
+
+
 def _private_key(pem: bytes):
     try:
         return serialization.load_pem_private_key(pem, password=None)
@@ -223,6 +237,16 @@ def validate(cert_pem: bytes, key_pem: bytes) -> x509.Certificate:
     key = _private_key(key_pem)
 
     if key.public_key().public_numbers() != certificate.public_key().public_numbers():
+        # A chain file has to lead with the server's own certificate. Some CAs
+        # export the other way round, which is worth naming rather than
+        # blaming the key.
+        for other in _certificates_in(cert_pem)[1:]:
+            if key.public_key().public_numbers() == other.public_key().public_numbers():
+                raise CertificateError(
+                    "That file starts with the CA's certificate instead of the "
+                    "server's. Put your own certificate first, then any CA "
+                    "certificates below it."
+                )
         raise CertificateError(
             "That private key does not go with that certificate. Check you "
             "picked the pair your CA issued together."
@@ -295,6 +319,45 @@ def install(cert_pem: bytes, key_pem: bytes) -> dict:
             ) from exc
 
     return {"certificate": describe(certificate), "applied": applied}
+
+
+def make_request(common_name: str, names: list[str]) -> tuple[bytes, bytes]:
+    """A private key and a CSR naming every address the server answers to.
+
+    The names go in the request itself rather than alongside it, because that
+    is the only place a Windows CA will read them from without an unsafe
+    registry flag (EDITF_ATTRIBUTESUBJECTALTNAME2) being turned on.
+    """
+    wanted = [common_name] + [n for n in names if n and n != common_name]
+    alternatives: list[x509.GeneralName] = []
+    seen = set()
+    for name in wanted:
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            alternatives.append(x509.IPAddress(ipaddress.ip_address(name)))
+        except ValueError:
+            alternatives.append(x509.DNSName(name))
+
+    # RSA rather than a curve: every AD CS certificate template accepts it.
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    request = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(
+            x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, common_name)])
+        )
+        .add_extension(x509.SubjectAlternativeName(alternatives), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    return (
+        request.public_bytes(serialization.Encoding.PEM),
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ),
+    )
 
 
 def _write(path: Path, payload: bytes, mode: int) -> None:
