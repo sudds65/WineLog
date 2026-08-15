@@ -62,11 +62,43 @@ leaving you with an app that only breaks on the first upload.
 | Flag | Effect |
 |---|---|
 | `--admin NAME` | Create this login (prompts for the password) |
-| `--port N` | Port to serve on [8071] |
+| `--port N` | Port to serve on [8071, or 443 with `--https`] |
 | `--host ADDR` | Address to bind [0.0.0.0] |
-| `--with-nginx` | Put nginx on port 80 in front, app stays on localhost |
-| `--domain NAME` | `server_name` for nginx [the machine's hostname] |
+| `--https` | Serve HTTPS, self-signed certificate unless `--tls-cert` |
+| `--tls-cert FILE` | Use this certificate instead of a generated one |
+| `--tls-key FILE` | The matching private key |
+| `--with-nginx` | Put nginx in front, on 80 (or 443 with `--https`) |
+| `--domain NAME` | `server_name` and certificate name [the machine's hostname] |
 | `--no-seed` | Skip loading the sample receipt |
+
+### Serving on 80 or 443
+
+Plain HTTP on port 80, so the address is just the hostname:
+
+```bash
+sudo ./deploy/install.sh --admin austin --port 80
+```
+
+Or HTTPS on 443, which also leaves port 80 redirecting to it:
+
+```bash
+sudo ./deploy/install.sh --admin austin --https --domain winelog.home.lan
+```
+
+`--https` on its own writes a self-signed certificate to `/etc/winelog/tls`,
+valid for the hostname, `localhost` and the machine's LAN address. Browsers
+warn once per device before you accept it; pass `--tls-cert`/`--tls-key` to use
+a real one instead. Either way the session cookie is marked `Secure`
+automatically — that setting follows the certificate, so there is nothing to
+remember.
+
+Neither port needs the app to run as root. The systemd unit grants it
+`CAP_NET_BIND_SERVICE`, which is the one privilege it takes to bind a low port;
+everything else is still dropped, and the process runs as the unprivileged
+`winelog` account.
+
+The installer refuses to continue if something else already holds the port
+(Apache and nginx both like 80) and tells you what is on it.
 
 After it finishes you get a `winelog` command for everything else:
 
@@ -86,7 +118,7 @@ pip install -r requirements.txt
 python manage.py init
 python manage.py create-user austin
 python manage.py seed
-uvicorn app.main:app --host 127.0.0.1 --port 8071
+python -m app.serve            # honours the WINELOG_* variables below
 ```
 
 ### Loading your receipts
@@ -129,12 +161,19 @@ The systemd unit runs as an unprivileged `winelog` account with
 By default it listens on `0.0.0.0` with ufw allowing the RFC1918 ranges only.
 If ufw was inactive the installer adds the rules (including SSH) but leaves it
 off, and tells you — turn it on with `sudo ufw enable`. With `--with-nginx` the
-app instead binds localhost and nginx serves port 80, allowing private ranges
-and denying the rest (`deploy/nginx.conf.example`).
+app instead binds localhost and nginx serves 80 (443 with `--https`), allowing
+private ranges and denying the rest (`deploy/nginx.conf.example`).
 
-**Serving over HTTPS?** Set `WINELOG_COOKIE_SECURE=true` in `/etc/winelog.env`
-so the session cookie is marked `Secure`. Leave it `false` on plain HTTP or the
-browser will drop the cookie and you'll never stay signed in.
+To change the port later, edit `/etc/winelog.env` and restart. Moving to or
+from 443 means keeping three things in step — the port, the certificate, and
+the firewall — so re-running the installer with the flags you want is usually
+easier than editing by hand.
+
+**Terminating TLS somewhere else** (nginx here, or a load balancer): the app
+sees plain HTTP and can't tell, so set `WINELOG_COOKIE_SECURE=true` yourself.
+Leave it alone on a plain-HTTP deployment or browsers will drop the session
+cookie and no one will stay signed in. The app warns at startup if these two
+look mismatched.
 
 ### Backups
 
@@ -178,10 +217,15 @@ All optional; defaults in brackets.
 
 | Variable | Purpose |
 |---|---|
+| `WINELOG_HOST` | Address to bind [`127.0.0.1`] |
+| `WINELOG_PORT` | Port to bind, 80 and 443 included [`8071`] |
+| `WINELOG_TLS_CERT` | Certificate to serve HTTPS with [none — plain HTTP] |
+| `WINELOG_TLS_KEY` | Its private key |
+| `WINELOG_HTTP_REDIRECT_PORT` | Also answer HTTP here and redirect to HTTPS [`0`] |
 | `WINELOG_DATA_DIR` | Database + uploads directory [`./data`] |
 | `WINELOG_DB` | Database path [`$WINELOG_DATA_DIR/winelog.db`] |
 | `WINELOG_UPLOAD_DIR` | Stored receipt PDFs [`$WINELOG_DATA_DIR/receipts`] |
-| `WINELOG_COOKIE_SECURE` | Mark the session cookie `Secure` [`false`] |
+| `WINELOG_COOKIE_SECURE` | Mark the session cookie `Secure` [on when TLS is configured] |
 | `WINELOG_SESSION_DAYS` | How long a login lasts [`30`] |
 | `WINELOG_MAX_UPLOAD_BYTES` | Upload size cap [`10485760`] |
 | `WINELOG_LOGIN_MAX_ATTEMPTS` | Failed logins before lockout [`8`] |
@@ -231,15 +275,17 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-49 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
-line maths) and API (auth, breakeven arithmetic, receipt de-duplication, search,
-insights, CSV export).
+69 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
+line maths), API (auth, breakeven arithmetic, receipt de-duplication, search,
+insights, CSV export), and serving (TLS arguments, certificate checks, the
+HTTP→HTTPS redirect, cookie policy).
 
 ## Layout
 
 ```
 app/
   main.py             FastAPI routes
+  serve.py            entry point: port, TLS, HTTP→HTTPS redirect
   receipt_parser.py   Square PDF → line items
   service.py          storage + breakeven maths
   search.py           search and insights queries

@@ -20,14 +20,36 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_optional_path(name: str) -> Path | None:
+    raw = os.environ.get(name, "").strip()
+    return Path(raw).expanduser() if raw else None
+
+
 DATA_DIR = _env_path("WINELOG_DATA_DIR", PROJECT_DIR / "data")
 DB_PATH = _env_path("WINELOG_DB", DATA_DIR / "winelog.db")
 UPLOAD_DIR = _env_path("WINELOG_UPLOAD_DIR", DATA_DIR / "receipts")
 STATIC_DIR = BASE_DIR / "static"
 
+# Where to listen. Ports below 1024 work because the systemd unit grants
+# CAP_NET_BIND_SERVICE — the app still runs as the unprivileged winelog account.
+HOST = os.environ.get("WINELOG_HOST", "127.0.0.1").strip() or "127.0.0.1"
+PORT = int(os.environ.get("WINELOG_PORT", "8071"))
+
+# Point these at a certificate and key to have the app itself serve HTTPS.
+# Leave them empty to serve plain HTTP (fine behind nginx, or on a VPN).
+TLS_CERT = _env_optional_path("WINELOG_TLS_CERT")
+TLS_KEY = _env_optional_path("WINELOG_TLS_KEY")
+TLS_ENABLED = TLS_CERT is not None and TLS_KEY is not None
+
+# Port to run a bare HTTP→HTTPS redirect on, so someone typing the hostname
+# without a scheme still lands on the app. Only used when TLS is on.
+HTTP_REDIRECT_PORT = int(os.environ.get("WINELOG_HTTP_REDIRECT_PORT", "0") or 0)
+
 # Cookie is marked Secure only when the app is served over HTTPS. A plain-HTTP
 # deployment on the VPN needs this off or the browser drops the session cookie.
-COOKIE_SECURE = _env_bool("WINELOG_COOKIE_SECURE", False)
+# Serving TLS ourselves flips the default, so the safe setting is automatic and
+# an HTTPS deployment can't quietly hand out a cookie that leaks over HTTP.
+COOKIE_SECURE = _env_bool("WINELOG_COOKIE_SECURE", TLS_ENABLED)
 COOKIE_NAME = os.environ.get("WINELOG_COOKIE_NAME", "winelog_session")
 SESSION_DAYS = int(os.environ.get("WINELOG_SESSION_DAYS", "30"))
 

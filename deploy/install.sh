@@ -11,25 +11,36 @@
 #
 # Options:
 #   --admin NAME     create this login (prompts for the password)
-#   --port N         port to serve on               [8071]
+#   --port N         port to serve on               [8071, or 443 with --https]
 #   --host ADDR      address to bind                [0.0.0.0]
-#   --with-nginx     also put nginx on port 80 in front of it
-#   --domain NAME    server_name for nginx          [the machine's hostname]
+#   --https          serve HTTPS, self-signed certificate unless --tls-cert
+#   --tls-cert FILE  use this certificate instead of a generated one
+#   --tls-key FILE   the matching private key
+#   --with-nginx     put nginx in front of it, on 80 (or 443 with --https)
+#   --domain NAME    server_name and certificate name [the machine's hostname]
 #   --no-seed        skip loading the sample receipt
+#
+# Ports 80 and 443 work without running the app as root: the systemd unit
+# grants CAP_NET_BIND_SERVICE to the unprivileged winelog account.
 #
 set -euo pipefail
 
 APP_DIR=/opt/winelog
 DATA_DIR=/var/lib/winelog
 ENV_FILE=/etc/winelog.env
+TLS_DIR=/etc/winelog/tls
 SERVICE_USER=winelog
 
 ADMIN_USER=""
-PORT=8071
+PORT=""
 HOST=0.0.0.0
 WITH_NGINX=0
 DOMAIN=""
 SEED=1
+TLS=0
+TLS_CERT=""
+TLS_KEY=""
+REDIRECT_PORT=0
 
 BOLD=$'\033[1m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'; OFF=$'\033[0m'
 say()  { printf '%s\n' "${BOLD}==>${OFF} $*"; }
@@ -42,9 +53,12 @@ while [[ $# -gt 0 ]]; do
     --port)       PORT="${2:-}"; shift 2 ;;
     --host)       HOST="${2:-}"; shift 2 ;;
     --domain)     DOMAIN="${2:-}"; shift 2 ;;
+    --https)      TLS=1; shift ;;
+    --tls-cert)   TLS_CERT="${2:-}"; TLS=1; shift 2 ;;
+    --tls-key)    TLS_KEY="${2:-}"; TLS=1; shift 2 ;;
     --with-nginx) WITH_NGINX=1; shift ;;
     --no-seed)    SEED=0; shift ;;
-    -h|--help)    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)    awk 'NR>2 && /^#/ {sub(/^# ?/, ""); print; next} NR>2 {exit}' "$0"; exit 0 ;;
     *)            die "unknown option: $1" ;;
   esac
 done
@@ -54,8 +68,33 @@ done
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [[ -f "$SOURCE_DIR/manage.py" ]] || die "run this from inside the cloned repo"
 
-# nginx terminates on :80, so the app itself only needs to listen locally.
-if [[ $WITH_NGINX -eq 1 ]]; then HOST=127.0.0.1; fi
+if { [[ -n "$TLS_CERT" ]] && [[ -z "$TLS_KEY" ]]; } || \
+   { [[ -z "$TLS_CERT" ]] && [[ -n "$TLS_KEY" ]]; }; then
+  die "--tls-cert and --tls-key go together"
+fi
+
+# Asking for 443 is asking for HTTPS; nothing useful listens there in the clear.
+if [[ "$PORT" == "443" ]]; then TLS=1; fi
+
+# ── where things listen ──────────────────────────────────────────────────
+# Without nginx the app binds the public port itself (443 by default under
+# --https). With nginx the app stays on localhost and nginx takes 80/443.
+if [[ $WITH_NGINX -eq 1 ]]; then
+  HOST=127.0.0.1
+  [[ -n "$PORT" ]] || PORT=8071
+  EXPOSED_PORT=$([[ $TLS -eq 1 ]] && echo 443 || echo 80)
+  if [[ "$PORT" == "$EXPOSED_PORT" ]]; then
+    die "with --with-nginx, --port is the port nginx forwards to, so it can't be $EXPOSED_PORT — the port nginx itself listens on. Leave --port off, or use something like 8071."
+  fi
+else
+  [[ -n "$PORT" ]] || PORT=$([[ $TLS -eq 1 ]] && echo 443 || echo 8071)
+  EXPOSED_PORT="$PORT"
+  # Someone typing just the hostname arrives on 80; bounce them to HTTPS.
+  if [[ $TLS -eq 1 && "$PORT" == "443" ]]; then REDIRECT_PORT=80; fi
+fi
+
+[[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1 && "$PORT" -le 65535 ]] \
+  || die "--port must be a number from 1 to 65535, got '$PORT'"
 
 # ── packages ─────────────────────────────────────────────────────────────
 command -v apt-get >/dev/null 2>&1 \
@@ -65,7 +104,8 @@ OS_NAME="$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown}")"
 say "Installing system packages on ${OS_NAME}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip rsync >/dev/null
+apt-get install -y -qq python3 python3-venv python3-pip rsync iproute2 >/dev/null
+if [[ $TLS -eq 1 ]]; then apt-get install -y -qq openssl >/dev/null; fi
 if [[ $WITH_NGINX -eq 1 ]]; then apt-get install -y -qq nginx >/dev/null; fi
 
 # ── service account ──────────────────────────────────────────────────────
@@ -105,15 +145,71 @@ fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR" "$DATA_DIR"
 chmod 750 "$DATA_DIR"
 
+# ── TLS certificate ──────────────────────────────────────────────────────
+[[ -n "$DOMAIN" ]] || DOMAIN="$(hostname -f 2>/dev/null || hostname)"
+LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+
+if [[ $TLS -eq 1 && -z "$TLS_CERT" ]]; then
+  TLS_CERT="$TLS_DIR/winelog.crt"
+  TLS_KEY="$TLS_DIR/winelog.key"
+  if [[ -f "$TLS_CERT" && -f "$TLS_KEY" ]]; then
+    say "Using the certificate already in $TLS_DIR"
+  else
+    say "Generating a self-signed certificate for $DOMAIN"
+    mkdir -p "$TLS_DIR"
+    ALT="DNS:$DOMAIN,DNS:localhost,IP:127.0.0.1"
+    if [[ -n "$LAN_IP" ]]; then ALT="$ALT,IP:$LAN_IP"; fi
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -subj "/CN=$DOMAIN" -addext "subjectAltName=$ALT" \
+      -keyout "$TLS_KEY" -out "$TLS_CERT" >/dev/null 2>&1 \
+      || die "could not generate a certificate — see: openssl req --help"
+    warn "It is self-signed, so the browser will warn once per device. Accept"
+    warn "it, or drop your own certificate in with --tls-cert/--tls-key."
+  fi
+fi
+
+if [[ $TLS -eq 1 ]]; then
+  [[ -f "$TLS_CERT" ]] || die "no such certificate: $TLS_CERT"
+  [[ -f "$TLS_KEY"  ]] || die "no such private key: $TLS_KEY"
+  # nginx reads the key as root; the app reads it as the service account.
+  chgrp "$SERVICE_USER" "$TLS_CERT" "$TLS_KEY" 2>/dev/null || true
+  chmod 0640 "$TLS_KEY"
+  chmod 0644 "$TLS_CERT"
+fi
+
 # ── configuration ────────────────────────────────────────────────────────
 if [[ ! -f "$ENV_FILE" ]]; then
   say "Writing $ENV_FILE"
   install -m 0644 "$APP_DIR/deploy/winelog.env.example" "$ENV_FILE"
 fi
-# Keep host/port in step with the flags on every run.
-sed -i "s|^WINELOG_HOST=.*|WINELOG_HOST=$HOST|;
-        s|^WINELOG_PORT=.*|WINELOG_PORT=$PORT|;
-        s|^WINELOG_DATA_DIR=.*|WINELOG_DATA_DIR=$DATA_DIR|" "$ENV_FILE"
+
+# Update a setting in place, or append it if this env file predates it.
+set_env() {
+  if grep -q "^$1=" "$ENV_FILE"; then
+    sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE"
+  fi
+}
+
+# Keep the flags and the env file in step on every run.
+set_env WINELOG_HOST "$HOST"
+set_env WINELOG_PORT "$PORT"
+set_env WINELOG_DATA_DIR "$DATA_DIR"
+
+if [[ $TLS -eq 1 && $WITH_NGINX -eq 0 ]]; then
+  set_env WINELOG_TLS_CERT "$TLS_CERT"
+  set_env WINELOG_TLS_KEY "$TLS_KEY"
+  set_env WINELOG_HTTP_REDIRECT_PORT "$REDIRECT_PORT"
+  set_env WINELOG_COOKIE_SECURE true
+else
+  # nginx terminates TLS, so the app speaks plain HTTP on localhost — but the
+  # browser still sees HTTPS, so the cookie must be marked Secure.
+  set_env WINELOG_TLS_CERT ""
+  set_env WINELOG_TLS_KEY ""
+  set_env WINELOG_HTTP_REDIRECT_PORT 0
+  set_env WINELOG_COOKIE_SECURE "$([[ $TLS -eq 1 ]] && echo true || echo false)"
+fi
 
 # ── database ─────────────────────────────────────────────────────────────
 run_manage() { sudo -u "$SERVICE_USER" env WINELOG_DATA_DIR="$DATA_DIR" \
@@ -157,6 +253,26 @@ WRAPPER
 chmod 0755 /usr/local/bin/winelog
 
 # ── service ──────────────────────────────────────────────────────────────
+# Free our own ports before checking who holds them, so a re-run doesn't
+# report itself as the conflict.
+systemctl stop winelog >/dev/null 2>&1 || true
+
+port_holder() {  # the program listening on a TCP port, if any
+  ss -ltnpH "sport = :$1" 2>/dev/null | grep -oP 'users:\(\("\K[^"]+' | head -1
+}
+
+CHECK_PORTS="$PORT"
+if [[ "$EXPOSED_PORT" != "$PORT" ]]; then CHECK_PORTS="$CHECK_PORTS $EXPOSED_PORT"; fi
+if [[ $REDIRECT_PORT -gt 0 ]];   then CHECK_PORTS="$CHECK_PORTS $REDIRECT_PORT"; fi
+
+for check in $CHECK_PORTS; do
+  holder="$(port_holder "$check")"
+  # nginx holding nginx's own ports is the arrangement we are installing.
+  if [[ -n "$holder" ]] && ! { [[ $WITH_NGINX -eq 1 ]] && [[ "$holder" == "nginx" ]]; }; then
+    die "port $check is already in use by '$holder' — stop it (sudo systemctl stop $holder) or pick another with --port N"
+  fi
+done
+
 say "Installing the systemd service"
 install -m 0644 "$APP_DIR/deploy/winelog.service" /etc/systemd/system/winelog.service
 systemctl daemon-reload
@@ -169,11 +285,63 @@ systemctl is-active --quiet winelog \
 
 # ── nginx ────────────────────────────────────────────────────────────────
 if [[ $WITH_NGINX -eq 1 ]]; then
-  say "Configuring nginx"
-  [[ -n "$DOMAIN" ]] || DOMAIN="$(hostname -f 2>/dev/null || hostname)"
-  sed -e "s|winelog.home.lan|$DOMAIN|" \
-      -e "s|proxy_pass http://127.0.0.1:8071;|proxy_pass http://127.0.0.1:$PORT;|" \
-      "$APP_DIR/deploy/nginx.conf.example" > /etc/nginx/sites-available/winelog
+  say "Configuring nginx on port $EXPOSED_PORT"
+
+  # Mirrors deploy/nginx.conf.example; edit both if you change one.
+  {
+    if [[ $TLS -eq 1 ]]; then
+      cat <<TLSHEAD
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name $DOMAIN;
+
+    ssl_certificate     $TLS_CERT;
+    ssl_certificate_key $TLS_KEY;
+    ssl_protocols TLSv1.2 TLSv1.3;
+TLSHEAD
+    else
+      cat <<PLAINHEAD
+server {
+    listen 80;
+    server_name $DOMAIN;
+PLAINHEAD
+    fi
+
+    cat <<BODY
+
+    # Only the VPN and LAN ranges get in. Adjust to your subnets.
+    allow 10.0.0.0/8;
+    allow 172.16.0.0/12;
+    allow 192.168.0.0/16;
+    deny  all;
+
+    client_max_body_size 12m;
+
+    location / {
+        proxy_pass http://127.0.0.1:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host              \$host;
+        proxy_set_header X-Real-IP         \$remote_addr;
+        proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 60s;
+    }
+}
+BODY
+
+    if [[ $TLS -eq 1 ]]; then
+      cat <<REDIRECT
+
+server {
+    listen 80;
+    server_name $DOMAIN;
+    return 301 https://\$host\$request_uri;
+}
+REDIRECT
+    fi
+  } > /etc/nginx/sites-available/winelog
+
   ln -sf /etc/nginx/sites-available/winelog /etc/nginx/sites-enabled/winelog
   rm -f /etc/nginx/sites-enabled/default
   nginx -t >/dev/null 2>&1 && systemctl reload nginx \
@@ -181,12 +349,16 @@ if [[ $WITH_NGINX -eq 1 ]]; then
 fi
 
 # ── firewall ─────────────────────────────────────────────────────────────
-EXPOSED_PORT=$([[ $WITH_NGINX -eq 1 ]] && echo 80 || echo "$PORT")
 if command -v ufw >/dev/null 2>&1; then
   say "Adding firewall rules for the private network"
   ufw allow OpenSSH >/dev/null 2>&1 || true
+  OPEN_PORTS="$EXPOSED_PORT"
+  # The HTTP→HTTPS bounce only helps if 80 is reachable too.
+  if [[ $TLS -eq 1 && "$EXPOSED_PORT" == "443" ]]; then OPEN_PORTS="$OPEN_PORTS 80"; fi
   for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
-    ufw allow from "$net" to any port "$EXPOSED_PORT" proto tcp >/dev/null 2>&1 || true
+    for p in $OPEN_PORTS; do
+      ufw allow from "$net" to any port "$p" proto tcp >/dev/null 2>&1 || true
+    done
   done
   if ! ufw status | grep -q "^Status: active"; then
     warn "ufw is installed but inactive. SSH is already allowed, so you can turn"
@@ -198,14 +370,25 @@ else
 fi
 
 # ── done ─────────────────────────────────────────────────────────────────
-LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [[ -n "$LAN_IP" ]] || LAN_IP="this-server"
-URL=$([[ $WITH_NGINX -eq 1 ]] && echo "http://$DOMAIN" || echo "http://$LAN_IP:$PORT")
+SCHEME=$([[ $TLS -eq 1 ]] && echo https || echo http)
+HOSTPART=$([[ $WITH_NGINX -eq 1 ]] && echo "$DOMAIN" || echo "$LAN_IP")
+
+# 80 and 443 are implied by the scheme, so leave them off the printed URL.
+if [[ "$SCHEME" == "https" && "$EXPOSED_PORT" == "443" ]] || \
+   [[ "$SCHEME" == "http"  && "$EXPOSED_PORT" == "80"  ]]; then
+  URL="$SCHEME://$HOSTPART"
+else
+  URL="$SCHEME://$HOSTPART:$EXPOSED_PORT"
+fi
 
 echo
 printf '%s\n' "${GREEN}${BOLD}WineLog is running.${OFF}"
 echo
 echo "  Open         $URL"
+if [[ $TLS -eq 1 && "$EXPOSED_PORT" == "443" ]]; then
+  echo "               (http://$HOSTPART redirects here)"
+fi
 if [[ -z "$ADMIN_USER" ]]; then
   echo "  Add a login  sudo winelog create-user <name>"
 fi

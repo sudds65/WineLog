@@ -9,16 +9,19 @@ User=winelog
 Group=winelog
 WorkingDirectory=/opt/winelog
 
-# Host, port, data directory and cookie policy all live here so this unit
-# never needs editing. See deploy/winelog.env.example.
+# Host, port, TLS certificate, data directory and cookie policy all live here
+# so this unit never needs editing. See deploy/winelog.env.example.
 EnvironmentFile=/etc/winelog.env
 
-ExecStart=/opt/winelog/.venv/bin/uvicorn app.main:app \
-    --host ${WINELOG_HOST} --port ${WINELOG_PORT} \
-    --proxy-headers --forwarded-allow-ips=127.0.0.1
+ExecStart=/opt/winelog/.venv/bin/python -m app.serve
 
 Restart=on-failure
 RestartSec=5
+
+# Lets the app listen on 80/443 while still running as the unprivileged
+# winelog account. Harmless on a high port, so it is granted unconditionally.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 # Hardening — the app only ever needs to write its own data directory.
 NoNewPrivileges=true
