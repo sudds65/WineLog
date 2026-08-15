@@ -69,6 +69,7 @@ leaving you with an app that only breaks on the first upload.
 | `--tls-key FILE` | The matching private key |
 | `--with-nginx` | Put nginx in front, on 80 (or 443 with `--https`) |
 | `--domain NAME` | `server_name` and certificate name [the machine's hostname] |
+| `--san NAME` | Another name or IP the certificate must cover (repeatable) |
 | `--no-seed` | Skip loading the sample receipt |
 
 ### Serving on 80 or 443
@@ -86,7 +87,9 @@ sudo ./deploy/install.sh --admin austin --https --domain winelog.home.lan
 ```
 
 `--https` on its own writes a self-signed certificate to `/etc/winelog/tls`,
-valid for the hostname, `localhost` and the machine's LAN address. Browsers
+valid for the FQDN, the bare hostname, `localhost` and the machine's LAN
+address. Add `--san` for any other name you'll type — an mDNS `.local` name, a
+second IP. Browsers
 warn once per device before you accept it; pass `--tls-cert`/`--tls-key` to use
 a real one instead, or upload one from **Settings** once the app is up. Either
 way the session cookie is marked `Secure` automatically — that setting follows
@@ -126,6 +129,23 @@ sudo winelog tls                          # what's being served, and until when
 sudo winelog tls fullchain.pem key.pem    # install; restart to pick it up
 sudo winelog tls --remove                 # drop back to winelog.env, or to HTTP
 ```
+
+**Name the certificate for every address you'll use.** A browser checks the
+address bar against the certificate's SANs, so a certificate issued only for
+`winelog.home.lan` fails the moment someone types the IP — which phones tend to
+do when DNS doesn't reach them. Ask your CA for all of them at once:
+
+```bash
+openssl req -newkey rsa:2048 -nodes -subj "/CN=winelog.home.lan" \
+  -keyout winelog.key -out winelog.csr
+openssl x509 -req -in winelog.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -days 397 -out winelog.crt -extfile <(printf \
+  "subjectAltName=DNS:winelog.home.lan,DNS:winelog,IP:192.168.1.50")
+```
+
+The upload screen refuses a certificate that doesn't name the address you're
+browsing from, and tells you which names it does carry, so this is caught
+before it can lock you out rather than after.
 
 Upload one while the app is on plain HTTP and it's stored, then served after
 `sudo systemctl restart winelog` — on whatever port the app is already on. Use
@@ -316,7 +336,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-105 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
+108 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
 line maths), API (auth, breakeven arithmetic, receipt de-duplication, search,
 insights, CSV export), serving (TLS arguments, certificate checks, the
 HTTP→HTTPS redirect, cookie policy), certificates (validation, hostname

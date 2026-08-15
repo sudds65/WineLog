@@ -30,8 +30,10 @@ def run_bash(body: str) -> subprocess.CompletedProcess:
 
 
 def extract(name: str) -> str:
-    """Pull one shell function out of the installer, brace-matched."""
-    match = re.search(rf"^{name}\(\) \{{.*?^\}}", SCRIPT, re.MULTILINE | re.DOTALL)
+    """Pull one shell function out of the installer, closing at its own indent."""
+    match = re.search(
+        rf"^([ \t]*){name}\(\) \{{.*?^\1\}}", SCRIPT, re.MULTILINE | re.DOTALL
+    )
     assert match, f"{name}() not found in install.sh"
     return match.group(0)
 
@@ -81,6 +83,30 @@ def test_set_env_adds_a_key_that_is_not_there_yet(tmp_path):
     assert "WINELOG_PORT=443" in written
     assert "WINELOG_TLS_CERT=/etc/winelog/tls/winelog.crt" in written
     assert written.count("WINELOG_PORT=") == 1
+
+
+def sans_for(*values: str) -> str:
+    """Run the installer's SAN builder over some names and return the list."""
+    calls = "\n".join(f'add_san "{value}"' for value in values)
+    result = run_bash(f'ALT=""\n{extract("add_san")}\n{calls}\necho "$ALT"')
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def test_names_and_addresses_are_tagged_correctly():
+    """A browser only accepts an IP if it is an IP SAN, not a DNS one."""
+    assert sans_for("winelog.suddarth.local", "192.168.86.150") == (
+        "DNS:winelog.suddarth.local,IP:192.168.86.150"
+    )
+
+
+def test_a_repeated_name_is_only_listed_once():
+    assert sans_for("winelog", "winelog") == "DNS:winelog"
+
+
+def test_an_empty_name_is_skipped_without_aborting():
+    """`hostname -I` comes back empty on a machine with no LAN address."""
+    assert sans_for("", "winelog") == "DNS:winelog"
 
 
 def test_help_lists_the_tls_options():

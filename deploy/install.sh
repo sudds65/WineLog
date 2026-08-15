@@ -18,6 +18,7 @@
 #   --tls-key FILE   the matching private key
 #   --with-nginx     put nginx in front of it, on 80 (or 443 with --https)
 #   --domain NAME    server_name and certificate name [the machine's hostname]
+#   --san NAME       another name or IP the certificate must cover (repeatable)
 #   --no-seed        skip loading the sample receipt
 #
 # Ports 80 and 443 work without running the app as root: the systemd unit
@@ -41,6 +42,7 @@ TLS=0
 TLS_CERT=""
 TLS_KEY=""
 REDIRECT_PORT=0
+EXTRA_SANS=()
 
 BOLD=$'\033[1m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'; OFF=$'\033[0m'
 say()  { printf '%s\n' "${BOLD}==>${OFF} $*"; }
@@ -53,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --port)       PORT="${2:-}"; shift 2 ;;
     --host)       HOST="${2:-}"; shift 2 ;;
     --domain)     DOMAIN="${2:-}"; shift 2 ;;
+    --san)        EXTRA_SANS+=("${2:-}"); TLS=1; shift 2 ;;
     --https)      TLS=1; shift ;;
     --tls-cert)   TLS_CERT="${2:-}"; TLS=1; shift 2 ;;
     --tls-key)    TLS_KEY="${2:-}"; TLS=1; shift 2 ;;
@@ -155,10 +158,29 @@ if [[ $TLS -eq 1 && -z "$TLS_CERT" ]]; then
   if [[ -f "$TLS_CERT" && -f "$TLS_KEY" ]]; then
     say "Using the certificate already in $TLS_DIR"
   else
+    # Every address you might type has to be named on the certificate, or the
+    # browser rejects it: the FQDN, the bare hostname, and the LAN address.
+    ALT=""
+    add_san() {
+      local value="$1" kind=DNS
+      if [[ -z "$value" ]]; then return 0; fi
+      if [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$value" == *:* ]]; then
+        kind=IP
+      fi
+      case ",$ALT," in *",$kind:$value,"*) return 0 ;; esac
+      ALT="${ALT:+$ALT,}$kind:$value"
+    }
+
+    add_san "$DOMAIN"
+    if [[ "$DOMAIN" == *.* ]]; then add_san "${DOMAIN%%.*}"; fi
+    add_san localhost
+    add_san 127.0.0.1
+    add_san "$LAN_IP"
+    for extra in ${EXTRA_SANS[@]+"${EXTRA_SANS[@]}"}; do add_san "$extra"; done
+
     say "Generating a self-signed certificate for $DOMAIN"
+    say "  valid for: ${ALT//,/, }"
     mkdir -p "$TLS_DIR"
-    ALT="DNS:$DOMAIN,DNS:localhost,IP:127.0.0.1"
-    if [[ -n "$LAN_IP" ]]; then ALT="$ALT,IP:$LAN_IP"; fi
     openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
       -subj "/CN=$DOMAIN" -addext "subjectAltName=$ALT" \
       -keyout "$TLS_KEY" -out "$TLS_CERT" >/dev/null 2>&1 \
