@@ -7,6 +7,7 @@
     python manage.py list-users
     python manage.py seed                  # load the purchases from the spreadsheet
     python manage.py import path/to.pdf    # ingest a receipt from the shell
+    python manage.py tls                   # show or install the HTTPS certificate
     python manage.py stats
 """
 from __future__ import annotations
@@ -297,6 +298,54 @@ def cmd_config(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_tls(args: argparse.Namespace) -> None:
+    """Show the certificate being served, or install one from a file."""
+    from app import tls
+
+    if args.certificate:
+        cert_path = Path(args.certificate)
+        key_path = Path(args.key) if args.key else cert_path
+        for path in {cert_path, key_path}:
+            if not path.exists():
+                sys.exit(f"No such file: {path}")
+        try:
+            result = tls.install(cert_path.read_bytes(), key_path.read_bytes())
+        except tls.CertificateError as exc:
+            sys.exit(str(exc))
+
+        described = result["certificate"]
+        print(f"Installed {described['subject']}, expires {described['not_after']}.")
+        print(f"Stored in {tls.uploaded_pair()[0].parent}")
+        # A CLI run is a different process from the service, so the running
+        # server is still holding the old certificate.
+        print("\nRestart to serve it:  sudo systemctl restart winelog")
+        return
+
+    cert_path, _, source = tls.active_pair()
+    if cert_path is None:
+        print("Serving        http — no certificate installed")
+        print(f"\nInstall one:   {_cli_name()} tls <cert.pem> <key.pem>")
+        print("Or generate a self-signed pair: sudo ./deploy/install.sh --https")
+        return
+
+    described = tls.describe_active()
+    if described is None:
+        sys.exit(f"The certificate at {cert_path} could not be read.")
+
+    origin = "uploaded through the web app" if source == "uploaded" else "from winelog.env"
+    expiry = f"{described['days_remaining']} days left"
+    if described["expired"]:
+        expiry = "EXPIRED"
+    print(f"Serving        https ({origin})")
+    print(f"Subject        {described['subject']}")
+    print(f"Issuer         {described['issuer']}" + ("  (self-signed)" if described["self_signed"] else ""))
+    print(f"Valid          {described['not_before']} → {described['not_after']}  ({expiry})")
+    print(f"Names          {', '.join(described['names'])}")
+    print(f"Key            {described['key']}")
+    print(f"Fingerprint    {described['fingerprint_sha256']}")
+    print(f"File           {cert_path}")
+
+
 def cmd_stats(_: argparse.Namespace) -> None:
     with db.get_conn() as conn:
         summary = service.stats(conn)
@@ -341,6 +390,13 @@ def main() -> None:
         help="e.g. --set membership_tax=105 --set term_end=2027-08-06",
     )
     p.set_defaults(func=cmd_config)
+
+    p = sub.add_parser("tls", help="show or install the HTTPS certificate")
+    p.add_argument("certificate", nargs="?", help="PEM certificate to install")
+    p.add_argument(
+        "key", nargs="?", help="its private key (omit if the certificate file holds both)"
+    )
+    p.set_defaults(func=cmd_tls)
 
     sub.add_parser("stats").set_defaults(func=cmd_stats)
 

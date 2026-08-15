@@ -1241,7 +1241,127 @@
     $("#set-discount").value = settings.discount_percent || 50;
     $("#set-name").value = settings.member_name || "";
     updateTargetPreview();
+    await renderTls();
   }
+
+  // ── HTTPS certificate ────────────────────────────────────────────────
+
+  async function renderTls() {
+    const node = $("#tls-current");
+    let info;
+    try {
+      info = await api("/api/tls");
+    } catch (err) {
+      node.innerHTML = `<p class="muted">Couldn't read the certificate: ${esc(err.message)}</p>`;
+      return;
+    }
+    $("#tls-form").hidden = false;
+
+    const cert = info.certificate;
+    const rows = [];
+
+    if (!cert) {
+      rows.push(
+        `<p class="muted">Serving plain HTTP — no certificate installed.</p>`
+      );
+    } else {
+      const days = cert.days_remaining;
+      let expiry = `${cert.not_after} — ${days} days away`;
+      let tone = "good";
+      if (cert.expired) {
+        expiry = `expired on ${cert.not_after}`;
+        tone = "bad";
+      } else if (days <= 30) {
+        expiry = `${cert.not_after} — only ${days} days left`;
+        tone = "warn";
+      }
+      rows.push(
+        tlsRow("Issued to", esc(cert.subject)),
+        tlsRow(
+          "Issued by",
+          esc(cert.issuer) +
+            (cert.self_signed
+              ? ' <span class="pill pill--muted">self-signed</span>'
+              : "")
+        ),
+        tlsRow("Valid until", `<span class="tls__${tone}">${esc(expiry)}</span>`),
+        tlsRow("Good for", cert.names.map(esc).join(", ") || "—"),
+        tlsRow("Fingerprint", `<code class="tls__print">${esc(cert.fingerprint_sha256)}</code>`)
+      );
+    }
+
+    const notes = [];
+    if (cert && info.covers_current_host === false) {
+      notes.push(
+        `<p class="alert alert--warn">This certificate doesn't name ` +
+          `<b>${esc((info.current_host || "").split(":")[0])}</b>, the address ` +
+          `you're using, so your browser is warning about it.</p>`
+      );
+    }
+    if (info.behind_proxy) {
+      notes.push(
+        `<p class="alert alert--warn">nginx is terminating HTTPS in front of the app, ` +
+          `so a certificate installed here won't be used. Put it in nginx's config instead.</p>`
+      );
+    } else if (!info.serving_https) {
+      notes.push(
+        `<p class="hint">Upload a certificate here and it's stored, but the app has to be ` +
+          `switched to HTTPS before it can serve it: ` +
+          `<code>sudo ./deploy/install.sh --https</code></p>`
+      );
+    } else if (!info.can_apply_live) {
+      notes.push(
+        `<p class="hint">A new certificate will be stored, and used after ` +
+          `<code>sudo systemctl restart winelog</code>.</p>`
+      );
+    }
+
+    node.innerHTML = `<dl class="tls__rows">${rows.join("")}</dl>${notes.join("")}`;
+  }
+
+  function tlsRow(label, value) {
+    return `<dt>${label}</dt><dd>${value}</dd>`;
+  }
+
+  $("#tls-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector('button[type="submit"]');
+    const error = $("#tls-error");
+    const ok = $("#tls-ok");
+    showError(error, "");
+    ok.hidden = true;
+
+    const certFile = $("#tls-cert").files[0];
+    if (!certFile) {
+      showError(error, "Choose a certificate file first.");
+      return;
+    }
+    const body = new FormData();
+    body.append("certificate", certFile, certFile.name);
+    const keyFile = $("#tls-key").files[0];
+    if (keyFile) body.append("private_key", keyFile, keyFile.name);
+    if ($("#tls-force").checked) body.append("force", "true");
+
+    setBusy(button, true, "Installing…");
+    try {
+      const result = await api("/api/tls", { method: "POST", body });
+      $("#tls-cert").value = "";
+      $("#tls-key").value = "";
+      $("#tls-force").checked = false;
+      $("#tls-force-line").hidden = true;
+      ok.textContent = result.applied
+        ? "Installed. This page is already being served with it — no restart needed."
+        : "Stored. It will be served after the app is restarted.";
+      ok.hidden = false;
+      await renderTls();
+    } catch (err) {
+      // 409 is the "your browser would reject this" guard, which can be waived.
+      if (err.status === 409) $("#tls-force-line").hidden = false;
+      showError(error, err.message);
+    } finally {
+      setBusy(button, false);
+    }
+  });
 
   function updateTargetPreview() {
     const fee = parseAmount($("#set-fee").value) || 0;

@@ -373,6 +373,35 @@
       </div>
 
       <div class="card">
+        <h2 class="card__label">HTTPS certificate</h2>
+        <div id="tls-current" class="tls"></div>
+        <form id="tls-form" class="form" hidden>
+          <div class="form__row">
+            <label class="field">
+              <span class="field__label">Certificate</span>
+              <input class="input input--file" type="file" id="tls-cert"
+                     accept=".crt,.pem,.cer,.cert" required>
+            </label>
+            <label class="field">
+              <span class="field__label">Private key</span>
+              <input class="input input--file" type="file" id="tls-key" accept=".key,.pem">
+            </label>
+          </div>
+          <p class="hint">
+            PEM format. Leave the key empty if your certificate file holds both.
+            The key is stored on the server and never sent back to the browser.
+          </p>
+          <label class="checkline" id="tls-force-line" hidden>
+            <input type="checkbox" id="tls-force">
+            <span>Install it anyway — I reach WineLog by a name on the certificate</span>
+          </label>
+          <p class="alert alert--error" id="tls-error" hidden role="alert"></p>
+          <p class="alert alert--ok" id="tls-ok" hidden role="status"></p>
+          <button class="btn btn--primary" type="submit">Install certificate</button>
+        </form>
+      </div>
+
+      <div class="card">
         <h2 class="card__label">Change password</h2>
         <form id="password-form" class="form">
           <label class="field">

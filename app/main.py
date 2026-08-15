@@ -10,12 +10,22 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import auth, config, db, service
+from . import auth, config, db, service, tls
 from .auth import AuthedUser, CsrfGuard, CurrentUser
 from .receipt_parser import ReceiptParseError, parse_pdf, to_cents
 from .search import insights, search_items
@@ -434,6 +444,87 @@ def update_settings(
         with db.transaction(conn):
             db.set_settings(conn, values)
         return {"settings": db.get_settings(conn), "stats": service.stats(conn)}
+
+
+# --------------------------------------------------------------------------
+# TLS certificate
+# --------------------------------------------------------------------------
+
+
+def _tls_state(request: Request) -> dict:
+    """What the settings screen needs to know about the certificate in use."""
+    _, _, source = tls.active_pair()
+    certificate = tls.describe_active()
+    host = (request.headers.get("host") or "").split(",")[0].strip()
+
+    covers = None
+    if certificate is not None:
+        cert_path, _, _ = tls.active_pair()
+        try:
+            covers = tls.covers(tls.load(cert_path), host)
+        except Exception:
+            covers = None
+
+    return {
+        "serving_https": config.TLS_ENABLED,
+        # False when nginx terminates TLS, or when this process serves plain
+        # HTTP: the certificate is stored either way, but cannot go live here.
+        "can_apply_live": tls.live_context() is not None,
+        "behind_proxy": config.COOKIE_SECURE and not config.TLS_ENABLED,
+        "source": source,
+        "current_host": host,
+        "covers_current_host": covers,
+        "certificate": certificate,
+    }
+
+
+@app.get("/api/tls")
+def read_tls(request: Request, user: CurrentUser = AuthedUser) -> dict:
+    return _tls_state(request)
+
+
+@app.post("/api/tls")
+async def install_tls(
+    request: Request,
+    certificate: Annotated[UploadFile, File()],
+    private_key: Annotated[UploadFile | None, File()] = None,
+    force: Annotated[bool, Form()] = False,
+    user: CurrentUser = AuthedUser,
+    _: None = CsrfGuard,
+) -> dict:
+    cert_pem = await certificate.read(tls.MAX_PEM_BYTES + 1)
+    # A key is optional: some CAs hand back one file holding both.
+    key_pem = await private_key.read(tls.MAX_PEM_BYTES + 1) if private_key else cert_pem
+    if len(cert_pem) > tls.MAX_PEM_BYTES or len(key_pem) > tls.MAX_PEM_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "That file is far too large to be a certificate",
+        )
+
+    try:
+        parsed = tls.validate(cert_pem, key_pem)
+    except tls.CertificateError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+
+    # Installing a certificate that doesn't name the address you are on would
+    # lock this browser out of the app, so it takes a deliberate override.
+    host = (request.headers.get("host") or "").split(",")[0].strip()
+    if not force and not tls.covers(parsed, host):
+        names = ", ".join(tls.subject_names(parsed)) or "nothing"
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"That certificate is for {names}, but you are on "
+            f"{host.rsplit(':', 1)[0] or 'this address'}. Your browser would "
+            f"reject it. Install it anyway only if you reach the app by one of "
+            f"those names.",
+        )
+
+    try:
+        result = tls.install(cert_pem, key_pem)
+    except tls.CertificateError as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc))
+
+    return {**_tls_state(request), "applied": result["applied"]}
 
 
 @app.get("/api/export.csv")

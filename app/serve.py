@@ -18,7 +18,7 @@ from pathlib import Path
 
 import uvicorn
 
-from . import config
+from . import config, tls
 
 # Trust X-Forwarded-* from the local machine only, so nginx (or nothing) can
 # sit in front without letting a client spoof its own scheme or address.
@@ -127,7 +127,10 @@ def _start_redirect(listen_host: str, http_port: int, https_port: int) -> None:
 
 
 def main() -> None:
-    problems = tls_problems(config.TLS_CERT, config.TLS_KEY)
+    pair = config.active_tls_pair()
+    cert, key = pair if pair else (None, None)
+
+    problems = tls_problems(cert, key)
     if problems:
         for problem in problems:
             print(f"winelog: {problem}", file=sys.stderr)
@@ -152,10 +155,16 @@ def main() -> None:
     scheme = "https" if config.TLS_ENABLED else "http"
     print(f"winelog: serving {scheme} on {config.HOST}:{config.PORT}", file=sys.stderr)
 
-    uvicorn.run(
-        "app.main:app",
-        **uvicorn_options(config.HOST, config.PORT, config.TLS_CERT, config.TLS_KEY),
+    # Build the config here rather than calling uvicorn.run(), so the SSL
+    # context is ours to hold on to: rebinding a newly uploaded certificate
+    # means loading it into this very object. See app/tls.py.
+    server_config = uvicorn.Config(
+        "app.main:app", **uvicorn_options(config.HOST, config.PORT, cert, key)
     )
+    server_config.load()
+    tls.register_live_context(getattr(server_config, "ssl", None))
+
+    uvicorn.Server(server_config).run()
 
 
 if __name__ == "__main__":

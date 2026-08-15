@@ -133,7 +133,7 @@ say "Setting up the Python environment (Python $(python3 -V 2>&1 | awk '{print $
 # be ahead of the published wheels, in which case pip "succeeds" but the PDF
 # stack is unusable — better to find out now than on the first upload.
 check_deps() { "$APP_DIR/.venv/bin/python" -c \
-  'import fastapi, uvicorn, pdfplumber, multipart' >/dev/null 2>&1; }
+  'import fastapi, uvicorn, pdfplumber, multipart, cryptography' >/dev/null 2>&1; }
 
 if ! check_deps; then
   warn "A dependency did not import — retrying with build tools installed"
@@ -164,8 +164,14 @@ if [[ $TLS -eq 1 && -z "$TLS_CERT" ]]; then
       -keyout "$TLS_KEY" -out "$TLS_CERT" >/dev/null 2>&1 \
       || die "could not generate a certificate — see: openssl req --help"
     warn "It is self-signed, so the browser will warn once per device. Accept"
-    warn "it, or drop your own certificate in with --tls-cert/--tls-key."
+    warn "it, pass --tls-cert/--tls-key, or upload a certificate from your own"
+    warn "CA later in Settings — no restart needed."
   fi
+fi
+
+if [[ $TLS -eq 1 && $WITH_NGINX -eq 0 && -f "$DATA_DIR/tls/server.crt" ]]; then
+  warn "A certificate uploaded through the app is already installed and will be"
+  warn "served instead of this one. Check it with: sudo winelog tls"
 fi
 
 if [[ $TLS -eq 1 ]]; then

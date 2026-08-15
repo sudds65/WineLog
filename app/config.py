@@ -39,7 +39,25 @@ PORT = int(os.environ.get("WINELOG_PORT", "8071"))
 # Leave them empty to serve plain HTTP (fine behind nginx, or on a VPN).
 TLS_CERT = _env_optional_path("WINELOG_TLS_CERT")
 TLS_KEY = _env_optional_path("WINELOG_TLS_KEY")
-TLS_ENABLED = TLS_CERT is not None and TLS_KEY is not None
+
+# A certificate uploaded through the web app is written here — the data
+# directory is the one place the service account can write. It takes
+# precedence over the pair above, so uploading always wins over the
+# bootstrap certificate the installer generated.
+UPLOADED_TLS_CERT = DATA_DIR / "tls" / "server.crt"
+UPLOADED_TLS_KEY = DATA_DIR / "tls" / "server.key"
+
+
+def active_tls_pair() -> tuple[Path, Path] | None:
+    """The certificate to serve with, or None for plain HTTP."""
+    if UPLOADED_TLS_CERT.exists() and UPLOADED_TLS_KEY.exists():
+        return UPLOADED_TLS_CERT, UPLOADED_TLS_KEY
+    if TLS_CERT is not None and TLS_KEY is not None:
+        return TLS_CERT, TLS_KEY
+    return None
+
+
+TLS_ENABLED = active_tls_pair() is not None
 
 # Port to run a bare HTTP→HTTPS redirect on, so someone typing the hostname
 # without a scheme still lands on the app. Only used when TLS is on.

@@ -88,9 +88,9 @@ sudo ./deploy/install.sh --admin austin --https --domain winelog.home.lan
 `--https` on its own writes a self-signed certificate to `/etc/winelog/tls`,
 valid for the hostname, `localhost` and the machine's LAN address. Browsers
 warn once per device before you accept it; pass `--tls-cert`/`--tls-key` to use
-a real one instead. Either way the session cookie is marked `Secure`
-automatically — that setting follows the certificate, so there is nothing to
-remember.
+a real one instead, or upload one from **Settings** once the app is up. Either
+way the session cookie is marked `Secure` automatically — that setting follows
+the certificate, so there is nothing to remember.
 
 Neither port needs the app to run as root. The systemd unit grants it
 `CAP_NET_BIND_SERVICE`, which is the one privilege it takes to bind a low port;
@@ -99,6 +99,37 @@ everything else is still dropped, and the process runs as the unprivileged
 
 The installer refuses to continue if something else already holds the port
 (Apache and nginx both like 80) and tells you what is on it.
+
+### Using your own CA
+
+**Settings → HTTPS certificate** takes the certificate and key your CA issued
+and binds them to the running server. There is no restart and no dropped
+request: uvicorn asks one SSL context for a certificate on every new
+connection, so loading yours into that context is enough — reload the page and
+it is already being served under the new certificate.
+
+The upload is checked before anything is touched: that the PEM parses, that the
+key is the one that goes with the certificate, that it isn't expired or
+passphrase-protected, and finally that OpenSSL itself will load the pair. A
+certificate that doesn't name the address you're on is held back too, since
+installing it would lock your browser out — there's a tick box to go ahead
+anyway if you reach the app by one of its other names. If a bind ever fails
+part-way, the previous certificate is put back and stays in service.
+
+Uploads land in `/var/lib/winelog/tls` — the data directory, the one place the
+service account can write — and **take precedence over `WINELOG_TLS_CERT`**, so
+uploading always beats the certificate the installer generated. The same thing
+from a shell:
+
+```bash
+sudo winelog tls                          # what's being served, and until when
+sudo winelog tls fullchain.pem key.pem    # install; restart to pick it up
+```
+
+A certificate uploaded while the app is on plain HTTP is stored but can't be
+served until the app is switched over (`sudo ./deploy/install.sh --https`). If
+nginx is terminating TLS in front, put the certificate in nginx's config
+instead — the Settings screen says so rather than pretending otherwise.
 
 After it finishes you get a `winelog` command for everything else:
 
@@ -209,7 +240,8 @@ sort filters, plus answers to the questions worth asking:
   same wine count as two orders of that wine
 
 **Settings** — membership fee and tax, term dates, default discount rate, CSV
-export, password change.
+export, password change, and the HTTPS certificate: what's being served, when it
+expires, and a place to upload the one your CA issued.
 
 ## Configuration
 
@@ -220,7 +252,7 @@ All optional; defaults in brackets.
 | `WINELOG_HOST` | Address to bind [`127.0.0.1`] |
 | `WINELOG_PORT` | Port to bind, 80 and 443 included [`8071`] |
 | `WINELOG_TLS_CERT` | Certificate to serve HTTPS with [none — plain HTTP] |
-| `WINELOG_TLS_KEY` | Its private key |
+| `WINELOG_TLS_KEY` | Its private key (an uploaded certificate wins over both) |
 | `WINELOG_HTTP_REDIRECT_PORT` | Also answer HTTP here and redirect to HTTPS [`0`] |
 | `WINELOG_DATA_DIR` | Database + uploads directory [`./data`] |
 | `WINELOG_DB` | Database path [`$WINELOG_DATA_DIR/winelog.db`] |
@@ -247,6 +279,7 @@ list-users
 seed [--force]             load app/seed_data.json
 import <pdf|dir> [...]     ingest receipts (--dry-run to preview)
 config [--set KEY=VALUE]   show or change settings
+tls [<cert> [<key>]]      show the HTTPS certificate, or install one
 stats                      breakeven summary in the terminal
 ```
 
@@ -265,6 +298,8 @@ This is built for a VPN-only network, not the open internet:
 * Cookies are `HttpOnly` + `SameSite=Lax`; writes additionally require a custom
   header, which a cross-origin page cannot set without a CORS preflight
 * Uploads are checked for the PDF magic bytes and size-capped
+* An uploaded TLS private key is written `0600` and never leaves the server —
+  the certificate details are readable in the app, the key is not
 * No external requests: no CDNs, no fonts, no analytics. The UI is plain HTML,
   CSS, and JavaScript with no build step.
 
@@ -275,10 +310,11 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-69 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
+99 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
 line maths), API (auth, breakeven arithmetic, receipt de-duplication, search,
-insights, CSV export), and serving (TLS arguments, certificate checks, the
-HTTP→HTTPS redirect, cookie policy).
+insights, CSV export), serving (TLS arguments, certificate checks, the
+HTTP→HTTPS redirect, cookie policy), and certificates (validation, hostname
+matching, rollback, and a real handshake proving the live rebind).
 
 ## Layout
 
@@ -286,6 +322,7 @@ HTTP→HTTPS redirect, cookie policy).
 app/
   main.py             FastAPI routes
   serve.py            entry point: port, TLS, HTTP→HTTPS redirect
+  tls.py              certificate upload, validation and live rebinding
   receipt_parser.py   Square PDF → line items
   service.py          storage + breakeven maths
   search.py           search and insights queries
