@@ -58,7 +58,11 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ $WITH_NGINX -eq 1 ]]; then HOST=127.0.0.1; fi
 
 # ── packages ─────────────────────────────────────────────────────────────
-say "Installing system packages"
+command -v apt-get >/dev/null 2>&1 \
+  || die "this installer expects Ubuntu/Debian (no apt-get found)"
+
+OS_NAME="$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown}")"
+say "Installing system packages on ${OS_NAME}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip rsync >/dev/null
@@ -80,10 +84,23 @@ if [[ "$SOURCE_DIR" != "$APP_DIR" ]]; then
         "$SOURCE_DIR"/ "$APP_DIR"/
 fi
 
-say "Setting up the Python environment"
+say "Setting up the Python environment (Python $(python3 -V 2>&1 | awk '{print $2}'))"
 [[ -d "$APP_DIR/.venv" ]] || python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --quiet --upgrade pip
 "$APP_DIR/.venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
+
+# Prove the dependencies actually import. On a very new Ubuntu the Python may
+# be ahead of the published wheels, in which case pip "succeeds" but the PDF
+# stack is unusable — better to find out now than on the first upload.
+check_deps() { "$APP_DIR/.venv/bin/python" -c \
+  'import fastapi, uvicorn, pdfplumber, multipart' >/dev/null 2>&1; }
+
+if ! check_deps; then
+  warn "A dependency did not import — retrying with build tools installed"
+  apt-get install -y -qq build-essential python3-dev >/dev/null
+  "$APP_DIR/.venv/bin/pip" install --force-reinstall -r "$APP_DIR/requirements.txt"
+  check_deps || die "dependencies could not be installed — see the output above"
+fi
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR" "$DATA_DIR"
 chmod 750 "$DATA_DIR"

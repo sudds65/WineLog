@@ -52,6 +52,11 @@ your private network in ufw, and prints the URL to open. Nothing else to do.
 Re-run it any time to update — it pulls in the new code, reinstalls
 dependencies, and restarts the service without touching your data.
 
+Verified on Ubuntu 24.04 and expected to work on any current release. If the
+distro's Python is newer than the published wheels for the PDF stack, the
+installer detects the failed import and retries with build tools rather than
+leaving you with an app that only breaks on the first upload.
+
 **Options**
 
 | Flag | Effect |
