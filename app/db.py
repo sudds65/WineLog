@@ -80,9 +80,12 @@ CREATE INDEX IF NOT EXISTS idx_items_qualifying ON items(qualifying);
 CREATE INDEX IF NOT EXISTS idx_items_norm ON items(description_norm);
 """
 
+# Breakeven target is membership_fee + membership_tax: $1,500.00 plus the 7%
+# Polk County sales tax printed on the Obscure receipts, so $1,605.00. The term
+# runs 12 months from signup on 2026-08-07.
 DEFAULT_SETTINGS = {
     "membership_fee_cents": "150000",
-    "membership_tax_cents": "0",
+    "membership_tax_cents": "10500",
     "term_start": "2026-08-07",
     "term_end": "2027-08-06",
     "discount_percent": "50",

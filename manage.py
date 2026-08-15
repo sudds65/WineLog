@@ -17,18 +17,26 @@ import hashlib
 import json
 import sqlite3
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app import auth, config, db, service  # noqa: E402
-from app.receipt_parser import ReceiptParseError, parse_pdf  # noqa: E402
+from app.receipt_parser import ReceiptParseError, parse_pdf, to_cents  # noqa: E402
 
 SEED_FILE = Path(__file__).resolve().parent / "app" / "seed_data.json"
 
 
 def _money(cents: int | None) -> str:
     return f"${(cents or 0) / 100:,.2f}"
+
+
+def _cli_name() -> str:
+    """How the user reached this CLI, so hints echo what they actually type."""
+    import os
+
+    return os.environ.get("WINELOG_CLI") or "python manage.py"
 
 
 def _prompt_password(confirm: bool = True) -> str:
@@ -216,6 +224,79 @@ def cmd_import(args: argparse.Namespace) -> None:
         )
 
 
+# Settings a human would want to change from the shell. Money keys are given
+# and shown in dollars; they are stored as integer cents.
+CONFIG_KEYS = {
+    "membership_fee": ("membership_fee_cents", "money"),
+    "membership_tax": ("membership_tax_cents", "money"),
+    "term_start": ("term_start", "date"),
+    "term_end": ("term_end", "date"),
+    "discount_percent": ("discount_percent", "number"),
+    "member_name": ("member_name", "text"),
+}
+
+
+def cmd_config(args: argparse.Namespace) -> None:
+    db.init_db()
+
+    if not args.set:
+        with db.get_conn() as conn:
+            settings = db.get_settings(conn)
+            summary = service.stats(conn)
+        for label, (key, kind) in CONFIG_KEYS.items():
+            raw = settings.get(key, "")
+            value = _money(int(raw)) if kind == "money" and raw else raw
+            print(f"{label:18} {value}")
+        print(f"\nbreakeven target   {_money(summary['target_cents'])}")
+        print(f"\nChange one with:  {_cli_name()} config --set membership_tax=105")
+        return
+
+    updates: dict[str, str] = {}
+    for pair in args.set:
+        if "=" not in pair:
+            sys.exit(f"Use key=value, got {pair!r}")
+        label, _, raw = pair.partition("=")
+        label, raw = label.strip(), raw.strip()
+        if label not in CONFIG_KEYS:
+            sys.exit(f"Unknown setting {label!r}. Try one of: {', '.join(CONFIG_KEYS)}")
+
+        key, kind = CONFIG_KEYS[label]
+        if kind == "money":
+            try:
+                updates[key] = str(to_cents(raw))
+            except Exception:
+                sys.exit(f"{label} must be an amount like 105 or 105.00")
+        elif kind == "date":
+            try:
+                updates[key] = date.fromisoformat(raw).isoformat()
+            except ValueError:
+                sys.exit(f"{label} must be a date like 2026-08-07")
+        elif kind == "number":
+            try:
+                updates[key] = str(float(raw))
+            except ValueError:
+                sys.exit(f"{label} must be a number")
+        else:
+            updates[key] = raw
+
+    with db.get_conn() as conn:
+        merged = dict(db.get_settings(conn))
+        merged.update(updates)
+        if merged.get("term_end", "") <= merged.get("term_start", ""):
+            sys.exit("term_end must be after term_start")
+
+        with db.transaction(conn):
+            db.set_settings(conn, updates)
+        summary = service.stats(conn)
+
+    for key, value in updates.items():
+        print(f"  {key} = {value}")
+    print(
+        f"\nBreakeven target is now {_money(summary['target_cents'])} — "
+        f"{_money(summary['remaining_cents'])} to go."
+    )
+
+
 def cmd_stats(_: argparse.Namespace) -> None:
     with db.get_conn() as conn:
         summary = service.stats(conn)
@@ -253,6 +334,13 @@ def main() -> None:
     p.add_argument("pdf", nargs="+")
     p.add_argument("--dry-run", action="store_true", help="parse and print, do not save")
     p.set_defaults(func=cmd_import)
+
+    p = sub.add_parser("config", help="show or change settings")
+    p.add_argument(
+        "--set", action="append", metavar="KEY=VALUE",
+        help="e.g. --set membership_tax=105 --set term_end=2027-08-06",
+    )
+    p.set_defaults(func=cmd_config)
 
     sub.add_parser("stats").set_defaults(func=cmd_stats)
 

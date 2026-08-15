@@ -3,7 +3,13 @@ import io
 
 import pytest
 
+from app.db import DEFAULT_SETTINGS
 from conftest import TEST_PASSWORD, TEST_USER
+
+# Breakeven target = membership fee + the tax paid on it.
+TARGET = int(DEFAULT_SETTINGS["membership_fee_cents"]) + int(
+    DEFAULT_SETTINGS["membership_tax_cents"]
+)
 
 PROTECTED = [
     ("get", "/api/stats"),
@@ -64,11 +70,20 @@ def test_writes_require_the_app_header(auth_client):
 
 
 def test_stats_start_at_the_membership_price(auth_client):
+    """$1,500 fee + $105 tax (7%, per the Obscure receipts) = $1,605 target."""
     stats = auth_client.get("/api/stats").json()
-    assert stats["target_cents"] == 150000
+    assert stats["membership_fee_cents"] == 150000
+    assert stats["membership_tax_cents"] == 10500
+    assert stats["target_cents"] == 160500
     assert stats["saved_cents"] == 0
-    assert stats["remaining_cents"] == 150000
+    assert stats["remaining_cents"] == 160500
     assert stats["broke_even"] is False
+
+
+def test_default_term_is_twelve_months_from_signup(auth_client):
+    stats = auth_client.get("/api/stats").json()
+    assert stats["term_start"] == "2026-08-07"
+    assert stats["term_end"] == "2027-08-06"
 
 
 def test_manual_purchase_saves_half_and_moves_the_tally(auth_client):
@@ -79,7 +94,7 @@ def test_manual_purchase_saves_half_and_moves_the_tally(auth_client):
     assert stats["saved_cents"] == 1550
     assert stats["pre_discount_cents"] == 3100
     assert stats["paid_cents"] == 1550
-    assert stats["remaining_cents"] == 150000 - 1550
+    assert stats["remaining_cents"] == TARGET - 1550
 
 
 def test_savings_accumulate_across_visits(auth_client):
@@ -90,16 +105,17 @@ def test_savings_accumulate_across_visits(auth_client):
 
     assert stats["saved_cents"] == 1500 + 1550 + 8600 + 900
     assert stats["visit_count"] == 4
-    assert stats["remaining_cents"] == 150000 - 12550
+    assert stats["remaining_cents"] == TARGET - 12550
     # Cumulative series is ordered oldest first and dated purchases merge by day.
     assert [row["date"] for row in stats["series"]] == ["2026-08-07", "2026-08-09", "2026-08-15"]
     assert stats["series"][-1]["cumulative_cents"] == 12550
 
 
 def test_breakeven_is_reached_and_clamped(auth_client):
-    purchase(auth_client, "2026-08-09", "Cellar raid", "3200.00")
+    purchase(auth_client, "2026-08-09", "Cellar raid", "3300.00")
     stats = auth_client.get("/api/stats").json()
-    assert stats["saved_cents"] == 160000
+    assert stats["saved_cents"] == 165000
+    assert stats["saved_cents"] > TARGET
     assert stats["broke_even"] is True
     assert stats["remaining_cents"] == 0
     assert stats["progress_percent"] == 100.0

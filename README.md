@@ -25,24 +25,64 @@ reference, but they never touch the savings total. On the sample receipt the
 $38.00 cheese board is stored and shown greyed out; the $31.00 of wine is what
 moves the needle, for $15.50 saved.
 
-Breakeven target = membership fee + any tax you paid on it (Settings). It starts
-at $1,500.00 — add the tax you paid there to make the target exact.
-
-## Quick start
+Breakeven target = membership fee + the tax paid on it, so **$1,605.00**
+($1,500.00 + 7% Polk County sales tax). The membership term runs 2026-08-07 to
+2027-08-06. All of that is editable in Settings, or from the shell:
 
 ```bash
-git clone <this repo> /opt/winelog && cd /opt/winelog
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-
-python manage.py init
-python manage.py create-user austin        # prompts for a password (10+ chars)
-python manage.py seed                      # loads app/seed_data.json
-
-uvicorn app.main:app --host 127.0.0.1 --port 8071
+sudo winelog config                              # show current values
+sudo winelog config --set membership_tax=105
+sudo winelog config --set term_end=2027-08-06
 ```
 
-Open <http://127.0.0.1:8071> and sign in.
+## Setting up on Ubuntu
+
+Two commands on a fresh Ubuntu server:
+
+```bash
+git clone https://github.com/sudds65/WineLog.git && cd WineLog
+sudo ./deploy/install.sh --admin austin
+```
+
+It prompts once for the password you want, then installs Python and the
+dependencies, creates a `winelog` service account, sets up the database in
+`/var/lib/winelog`, installs and starts the systemd service, opens the port to
+your private network in ufw, and prints the URL to open. Nothing else to do.
+
+Re-run it any time to update — it pulls in the new code, reinstalls
+dependencies, and restarts the service without touching your data.
+
+**Options**
+
+| Flag | Effect |
+|---|---|
+| `--admin NAME` | Create this login (prompts for the password) |
+| `--port N` | Port to serve on [8071] |
+| `--host ADDR` | Address to bind [0.0.0.0] |
+| `--with-nginx` | Put nginx on port 80 in front, app stays on localhost |
+| `--domain NAME` | `server_name` for nginx [the machine's hostname] |
+| `--no-seed` | Skip loading the sample receipt |
+
+After it finishes you get a `winelog` command for everything else:
+
+```bash
+sudo winelog import ~/receipts/*.pdf   # ingest receipts
+sudo winelog config                    # show settings
+sudo winelog stats                     # totals in the terminal
+sudo winelog create-user sarah         # add another login
+journalctl -u winelog -f               # logs
+```
+
+### Running it locally instead
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+python manage.py init
+python manage.py create-user austin
+python manage.py seed
+uvicorn app.main:app --host 127.0.0.1 --port 8071
+```
 
 ### Loading your receipts
 
@@ -67,22 +107,29 @@ than double-counted.
 > receipts and their line items instead. Import those receipt PDFs and the same
 > totals rebuild themselves with the actual wines named.
 
-## Deploying on the local server
+## How the server is wired up
+
+The installer puts the app in `/opt/winelog`, data in `/var/lib/winelog`, and
+service settings in `/etc/winelog.env` — that env file is the only thing you
+normally edit:
 
 ```bash
-sudo useradd --system --home /opt/winelog winelog
-sudo mkdir -p /var/lib/winelog && sudo chown winelog:winelog /var/lib/winelog
-sudo cp deploy/winelog.service /etc/systemd/system/
-sudo systemctl enable --now winelog
+sudo nano /etc/winelog.env       # host, port, data dir, cookie policy
+sudo systemctl restart winelog
 ```
 
-`deploy/nginx.conf.example` puts it behind nginx with the LAN/VPN ranges
-allowed and everything else denied. The service binds `127.0.0.1` by default, so
-nothing is exposed until you put a proxy in front of it.
+The systemd unit runs as an unprivileged `winelog` account with
+`ProtectSystem=strict`, so the app can only write its own data directory.
 
-**Serving over HTTPS?** Set `WINELOG_COOKIE_SECURE=true` so the session cookie is
-marked `Secure`. Leave it `false` on plain HTTP or the browser will drop the
-cookie and you'll never stay signed in.
+By default it listens on `0.0.0.0` with ufw allowing the RFC1918 ranges only.
+If ufw was inactive the installer adds the rules (including SSH) but leaves it
+off, and tells you — turn it on with `sudo ufw enable`. With `--with-nginx` the
+app instead binds localhost and nginx serves port 80, allowing private ranges
+and denying the rest (`deploy/nginx.conf.example`).
+
+**Serving over HTTPS?** Set `WINELOG_COOKIE_SECURE=true` in `/etc/winelog.env`
+so the session cookie is marked `Secure`. Leave it `false` on plain HTTP or the
+browser will drop the cookie and you'll never stay signed in.
 
 ### Backups
 
@@ -135,17 +182,28 @@ All optional; defaults in brackets.
 | `WINELOG_LOGIN_MAX_ATTEMPTS` | Failed logins before lockout [`8`] |
 | `WINELOG_LOGIN_LOCKOUT_SECONDS` | Lockout length [`300`] |
 
+Under systemd these live in `/etc/winelog.env`, which also carries
+`WINELOG_HOST` and `WINELOG_PORT` for the bind address.
+
 ## Admin CLI
 
+On a server these are all reachable as `sudo winelog <command>`; locally it's
+`python manage.py <command>`.
+
 ```
-python manage.py init                    # create the database
-python manage.py create-user <name>      # add a login
-python manage.py set-password <name>     # change one (signs out that user's devices)
-python manage.py list-users
-python manage.py seed [--force]          # load app/seed_data.json
-python manage.py import <pdf|dir> [...]  # ingest receipts
-python manage.py stats                   # breakeven summary in the terminal
+init                       create the database
+create-user <name>         add a login
+set-password <name>        change one (signs out that user's devices)
+list-users
+seed [--force]             load app/seed_data.json
+import <pdf|dir> [...]     ingest receipts (--dry-run to preview)
+config [--set KEY=VALUE]   show or change settings
+stats                      breakeven summary in the terminal
 ```
+
+Settings you can change with `config`: `membership_fee`, `membership_tax`,
+`term_start`, `term_end`, `discount_percent`, `member_name`. Money is given in
+dollars.
 
 ## Security notes
 
@@ -168,7 +226,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-48 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
+49 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
 line maths) and API (auth, breakeven arithmetic, receipt de-duplication, search,
 insights, CSV export).
 
@@ -185,7 +243,11 @@ app/
   config.py           environment configuration
   seed_data.json      receipt-level seed
   static/             the web app (index.html, app.css, app.js)
-deploy/               systemd unit + nginx example
+deploy/
+  install.sh          one-command Ubuntu setup
+  winelog.service     systemd unit
+  winelog.env.example service configuration
+  nginx.conf.example  optional reverse proxy
 manage.py             admin CLI
 tests/
 ```

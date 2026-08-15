@@ -9,13 +9,13 @@ User=winelog
 Group=winelog
 WorkingDirectory=/opt/winelog
 
-# Bind to the LAN/VPN interface only. 127.0.0.1 if you front it with nginx;
-# 0.0.0.0 only when the host itself is firewalled to the VPN.
-Environment=WINELOG_DATA_DIR=/var/lib/winelog
-# Set to true once the app is served over HTTPS.
-Environment=WINELOG_COOKIE_SECURE=false
+# Host, port, data directory and cookie policy all live here so this unit
+# never needs editing. See deploy/winelog.env.example.
+EnvironmentFile=/etc/winelog.env
+
 ExecStart=/opt/winelog/.venv/bin/uvicorn app.main:app \
-    --host 127.0.0.1 --port 8071 --proxy-headers --forwarded-allow-ips='127.0.0.1'
+    --host ${WINELOG_HOST} --port ${WINELOG_PORT} \
+    --proxy-headers --forwarded-allow-ips=127.0.0.1
 
 Restart=on-failure
 RestartSec=5
