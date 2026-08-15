@@ -1305,9 +1305,10 @@
       );
     } else if (!info.serving_https) {
       notes.push(
-        `<p class="hint">Upload a certificate here and it's stored, but the app has to be ` +
-          `switched to HTTPS before it can serve it: ` +
-          `<code>sudo ./deploy/install.sh --https</code></p>`
+        `<p class="hint">This app is serving plain HTTP. A certificate uploaded here is ` +
+          `stored and starts being served after <code>sudo systemctl restart winelog</code>` +
+          ` — on this same port. To move to the standard 443, re-run ` +
+          `<code>sudo ./deploy/install.sh --https</code>.</p>`
       );
     } else if (!info.can_apply_live) {
       notes.push(

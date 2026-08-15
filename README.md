@@ -124,11 +124,16 @@ from a shell:
 ```bash
 sudo winelog tls                          # what's being served, and until when
 sudo winelog tls fullchain.pem key.pem    # install; restart to pick it up
+sudo winelog tls --remove                 # drop back to winelog.env, or to HTTP
 ```
 
-A certificate uploaded while the app is on plain HTTP is stored but can't be
-served until the app is switched over (`sudo ./deploy/install.sh --https`). If
-nginx is terminating TLS in front, put the certificate in nginx's config
+Upload one while the app is on plain HTTP and it's stored, then served after
+`sudo systemctl restart winelog` — on whatever port the app is already on. Use
+`--https` to move it to 443. Because an uploaded certificate outranks
+`winelog.env`, re-running the installer *without* `--https` won't turn HTTPS
+back off; the installer says so and points at `winelog tls --remove`.
+
+If nginx is terminating TLS in front, put the certificate in nginx's config
 instead — the Settings screen says so rather than pretending otherwise.
 
 After it finishes you get a `winelog` command for everything else:
@@ -280,6 +285,7 @@ seed [--force]             load app/seed_data.json
 import <pdf|dir> [...]     ingest receipts (--dry-run to preview)
 config [--set KEY=VALUE]   show or change settings
 tls [<cert> [<key>]]      show the HTTPS certificate, or install one
+tls --remove              delete the uploaded certificate
 stats                      breakeven summary in the terminal
 ```
 
@@ -310,11 +316,12 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-99 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
+105 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
 line maths), API (auth, breakeven arithmetic, receipt de-duplication, search,
 insights, CSV export), serving (TLS arguments, certificate checks, the
-HTTP→HTTPS redirect, cookie policy), and certificates (validation, hostname
-matching, rollback, and a real handshake proving the live rebind).
+HTTP→HTTPS redirect, cookie policy), certificates (validation, hostname
+matching, rollback, and a real handshake proving the live rebind), and the
+installer's shell helpers under `set -euo pipefail`.
 
 ## Layout
 

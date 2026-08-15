@@ -302,6 +302,22 @@ def cmd_tls(args: argparse.Namespace) -> None:
     """Show the certificate being served, or install one from a file."""
     from app import tls
 
+    if args.remove:
+        cert_path, key_path = tls.uploaded_pair()
+        if not cert_path.exists() and not key_path.exists():
+            sys.exit("No uploaded certificate to remove.")
+        cert_path.unlink(missing_ok=True)
+        key_path.unlink(missing_ok=True)
+        print(f"Removed the uploaded certificate from {cert_path.parent}.")
+
+        fallback, _, _ = tls.active_pair()
+        if fallback is None:
+            print("Nothing else is configured, so it will serve plain HTTP.")
+        else:
+            print(f"It will fall back to {fallback}.")
+        print("\nTakes effect on:  sudo systemctl restart winelog")
+        return
+
     if args.certificate:
         cert_path = Path(args.certificate)
         key_path = Path(args.key) if args.key else cert_path
@@ -395,6 +411,10 @@ def main() -> None:
     p.add_argument("certificate", nargs="?", help="PEM certificate to install")
     p.add_argument(
         "key", nargs="?", help="its private key (omit if the certificate file holds both)"
+    )
+    p.add_argument(
+        "--remove", action="store_true",
+        help="delete the uploaded certificate and fall back to winelog.env",
     )
     p.set_defaults(func=cmd_tls)
 

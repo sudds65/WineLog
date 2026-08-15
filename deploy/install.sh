@@ -147,7 +147,7 @@ chmod 750 "$DATA_DIR"
 
 # ── TLS certificate ──────────────────────────────────────────────────────
 [[ -n "$DOMAIN" ]] || DOMAIN="$(hostname -f 2>/dev/null || hostname)"
-LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
 
 if [[ $TLS -eq 1 && -z "$TLS_CERT" ]]; then
   TLS_CERT="$TLS_DIR/winelog.crt"
@@ -209,12 +209,23 @@ if [[ $TLS -eq 1 && $WITH_NGINX -eq 0 ]]; then
   set_env WINELOG_HTTP_REDIRECT_PORT "$REDIRECT_PORT"
   set_env WINELOG_COOKIE_SECURE true
 else
-  # nginx terminates TLS, so the app speaks plain HTTP on localhost — but the
-  # browser still sees HTTPS, so the cookie must be marked Secure.
   set_env WINELOG_TLS_CERT ""
   set_env WINELOG_TLS_KEY ""
   set_env WINELOG_HTTP_REDIRECT_PORT 0
-  set_env WINELOG_COOKIE_SECURE "$([[ $TLS -eq 1 ]] && echo true || echo false)"
+
+  # An uploaded certificate outranks this file, so clearing the two settings
+  # above does not turn HTTPS off. Say so rather than leaving a server that
+  # answers on a scheme the operator didn't ask for.
+  if [[ $WITH_NGINX -eq 0 && -f "$DATA_DIR/tls/server.crt" ]]; then
+    warn "A certificate uploaded through the app is still installed, so it will"
+    warn "keep serving HTTPS on port $PORT. To go back to plain HTTP:"
+    warn "    sudo winelog tls --remove && sudo systemctl restart winelog"
+    set_env WINELOG_COOKIE_SECURE true
+  else
+    # With nginx the app speaks plain HTTP on localhost, but the browser still
+    # sees HTTPS, so the cookie must be marked Secure.
+    set_env WINELOG_COOKIE_SECURE "$([[ $TLS -eq 1 ]] && echo true || echo false)"
+  fi
 fi
 
 # ── database ─────────────────────────────────────────────────────────────
@@ -242,6 +253,10 @@ if [[ -n "$ADMIN_USER" ]]; then
       run_manage create-user "$ADMIN_USER" --password "$pw1" && break
     done
     unset pw1 pw2
+    if ! run_manage list-users | grep -qi "^$ADMIN_USER "; then
+      warn "Could not create '$ADMIN_USER'. Carrying on — add a login afterwards."
+      ADMIN_USER=""   # so the summary below tells them how
+    fi
   fi
 fi
 
@@ -253,7 +268,18 @@ cat > /usr/local/bin/winelog <<WRAPPER
 # Installed by deploy/install.sh — edit there, not here.
 set -euo pipefail
 if [[ \$EUID -ne 0 ]]; then exec sudo "\$0" "\$@"; fi
-exec sudo -u $SERVICE_USER env WINELOG_DATA_DIR=$DATA_DIR WINELOG_CLI=winelog \\
+
+# Read the same file the service reads, so the CLI reports on the server as it
+# is actually configured rather than on an unconfigured default.
+if [[ -r $ENV_FILE ]]; then set -a; . $ENV_FILE; set +a; fi
+
+exec sudo -u $SERVICE_USER env \\
+     WINELOG_DATA_DIR="\${WINELOG_DATA_DIR:-$DATA_DIR}" \\
+     WINELOG_DB="\${WINELOG_DB:-}" \\
+     WINELOG_UPLOAD_DIR="\${WINELOG_UPLOAD_DIR:-}" \\
+     WINELOG_TLS_CERT="\${WINELOG_TLS_CERT:-}" \\
+     WINELOG_TLS_KEY="\${WINELOG_TLS_KEY:-}" \\
+     WINELOG_CLI=winelog \\
      $APP_DIR/.venv/bin/python $APP_DIR/manage.py "\$@"
 WRAPPER
 chmod 0755 /usr/local/bin/winelog
@@ -264,7 +290,9 @@ chmod 0755 /usr/local/bin/winelog
 systemctl stop winelog >/dev/null 2>&1 || true
 
 port_holder() {  # the program listening on a TCP port, if any
-  ss -ltnpH "sport = :$1" 2>/dev/null | grep -oP 'users:\(\("\K[^"]+' | head -1
+  # A free port means grep matches nothing, which under `set -o pipefail` is a
+  # failed pipeline — hence the || true, or the common case aborts the install.
+  ss -ltnpH "sport = :$1" 2>/dev/null | grep -oP 'users:\(\("\K[^"]+' | head -1 || true
 }
 
 CHECK_PORTS="$PORT"
@@ -275,7 +303,9 @@ for check in $CHECK_PORTS; do
   holder="$(port_holder "$check")"
   # nginx holding nginx's own ports is the arrangement we are installing.
   if [[ -n "$holder" ]] && ! { [[ $WITH_NGINX -eq 1 ]] && [[ "$holder" == "nginx" ]]; }; then
-    die "port $check is already in use by '$holder' — stop it (sudo systemctl stop $holder) or pick another with --port N"
+    die "port $check is already in use by '$holder'. Stop whatever is holding it
+    (sudo ss -ltnp 'sport = :$check' shows the process), or choose a different
+    port with --port N."
   fi
 done
 
@@ -377,7 +407,12 @@ fi
 
 # ── done ─────────────────────────────────────────────────────────────────
 [[ -n "$LAN_IP" ]] || LAN_IP="this-server"
-SCHEME=$([[ $TLS -eq 1 ]] && echo https || echo http)
+
+# An uploaded certificate outranks winelog.env, so the app can end up serving
+# HTTPS on a run that never asked for it. Print the URL that will actually work.
+SERVING_TLS=$TLS
+if [[ $WITH_NGINX -eq 0 && -f "$DATA_DIR/tls/server.crt" ]]; then SERVING_TLS=1; fi
+SCHEME=$([[ $SERVING_TLS -eq 1 ]] && echo https || echo http)
 HOSTPART=$([[ $WITH_NGINX -eq 1 ]] && echo "$DOMAIN" || echo "$LAN_IP")
 
 # 80 and 443 are implied by the scheme, so leave them off the printed URL.
