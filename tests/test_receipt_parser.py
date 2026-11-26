@@ -112,7 +112,7 @@ def test_gmail_chrome_is_not_mistaken_for_an_item(parsed):
         assert not item.description.startswith("https")
 
 
-def test_non_founders_discount_does_not_count():
+def test_a_discount_below_the_member_rate_does_not_count():
     text = (
         "$10.00 #AB12\n"
         "Aug 9 2026 at 2:14 PM\n"
@@ -124,7 +124,61 @@ def test_non_founders_discount_does_not_count():
     receipt = parse_text(text)
     assert receipt.savings_cents == 0
     assert receipt.qualifying_items == []
-    assert any("non-founders discount" in w for w in receipt.warnings)
+    assert any("not the 50% member rate" in w for w in receipt.warnings)
+
+    # The money is still parsed, so ticking it on the review screen works.
+    assert receipt.items[0].discount_cents == 200
+    assert receipt.items[0].discount_label == "happy hour (20%)"
+
+
+def test_the_member_rate_counts_whatever_square_calls_it():
+    """A bottle off the retail shelf is labelled differently from a pour."""
+    text = (
+        "$96.00 #wfiR\n"
+        "Nov 15 2026 at 6:02 PM\n"
+        "2006 Michel Mailliard Brut $96.00\n"
+        "Reg Price$192.00\n"
+        "Discount: Retail Wine (50%) (-$96.00)\n"
+        "Total $96.00\n"
+    )
+    receipt = parse_text(text)
+    item = receipt.items[0]
+    assert item.qualifying is True
+    assert item.discount_cents == 9600
+    assert item.reg_price_cents == 19200
+    assert item.category == "wine"
+    assert receipt.savings_cents == 9600
+    assert receipt.warnings == []
+
+
+def test_the_member_rate_on_food_still_needs_a_tick():
+    """50% off a cheese board is not the wine-and-beer membership benefit."""
+    text = (
+        "$19.00 #EF56\n"
+        "Nov 15 2026 at 6:02 PM\n"
+        "3 Cheeses & 2 Meats $19.00\n"
+        "Reg Price$38.00\n"
+        "Discount: Staff (50%) (-$19.00)\n"
+        "Total $19.00\n"
+    )
+    receipt = parse_text(text)
+    item = receipt.items[0]
+    assert item.qualifying is False
+    assert item.discount_cents == 1900     # kept, so the tick box can use it
+    assert any("Tick it" in w for w in receipt.warnings)
+
+
+def test_the_member_rate_follows_the_settings():
+    text = (
+        "$80.00 #GH78\n"
+        "Nov 15 2026 at 6:02 PM\n"
+        "Nebel Riesling Bottle $80.00\n"
+        "Reg Price$100.00\n"
+        "Discount: Retail Wine (20%) (-$20.00)\n"
+        "Total $80.00\n"
+    )
+    assert parse_text(text).items[0].qualifying is False
+    assert parse_text(text, member_percent=20).items[0].qualifying is True
 
 
 def test_receipt_without_any_founders_line_is_flagged():

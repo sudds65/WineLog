@@ -12,13 +12,25 @@ you drink, and watch the 50% member discount pay back the membership fee.
 
 ## What counts toward breakeven
 
-Only line items that carry the founders discount marker:
+Line items carrying the member discount. Square labels it differently
+depending on what you bought — `founders (50%)` on a pour by the glass,
+`Retail Wine (50%)` on a bottle off the shelf — so the rule is the rate and
+the drink, not the wording:
 
 ```
 2022 Nebel Riesling                       $5.50
 Reg Price$11.00
-Discount: founders (50%) (-$5.50)          ← this line makes it count
+Discount: founders (50%) (-$5.50)          ← counts
+
+2006 Michel Mailliard Brut               $96.00
+Reg Price$192.00
+Discount: Retail Wine (50%) (-$96.00)      ← counts too, same benefit
 ```
+
+A discount at any other rate, or at 50% off something that isn't wine or beer,
+is parsed and shown but left unticked — the review screen says what it found
+and lets you tick it in. The rate comes from `discount_percent` in Settings, so
+if the membership terms change, the parser follows.
 
 Food, undiscounted extras, tax, and tip are parsed and kept on the receipt for
 reference, but they never touch the savings total. On the sample receipt the
@@ -341,7 +353,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-114 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
+118 tests: parser (page breaks, Gmail chrome, non-founders discounts, malformed
 line maths), API (auth, breakeven arithmetic, receipt de-duplication, search,
 insights, CSV export), serving (TLS arguments, certificate checks, the
 HTTP→HTTPS redirect, cookie policy), certificates (validation, hostname

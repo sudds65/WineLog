@@ -372,6 +372,7 @@ def receipt_from_parsed(parsed: ParsedReceipt) -> dict:
                 "paid_cents": i.paid_cents,
                 "qualifying": i.qualifying,
                 "discount_percent": i.discount_percent,
+                "discount_label": i.discount_label,
             }
             for i in parsed.items
         ],

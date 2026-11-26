@@ -45,10 +45,17 @@ RE_FOUNDERS = re.compile(
     r"discount:\s*founders\s*\(\s*(\d+(?:\.\d+)?)\s*%\s*\)\s*\(\s*-?\s*\$\s?([\d,]+\.\d{2})\s*\)",
     re.IGNORECASE,
 )
-# Any other discount line, so a non-founders promo is not mistaken for one.
+# Any other discount line. Square labels the same member benefit differently
+# depending on what you bought — "founders (50%)" on a pour, "Retail Wine
+# (50%)" on a bottle — so the label alone cannot decide what counts.
 RE_ANY_DISCOUNT = re.compile(
     r"discount:\s*(.+?)\s*\(\s*-?\s*\$\s?([\d,]+\.\d{2})\s*\)", re.IGNORECASE
 )
+# The rate inside a label: "Retail Wine (50%)" -> 50
+RE_LABEL_PERCENT = re.compile(r"\(\s*(\d+(?:\.\d+)?)\s*%\s*\)")
+
+# The membership rate. Overridden per-receipt from the Settings value.
+DEFAULT_MEMBER_PERCENT = 50.0
 RE_REG_PRICE = re.compile(r"reg(?:ular)?\s*price\s*" + MONEY, re.IGNORECASE)
 
 # "3 Cheeses & 2 Meats $38.00" — description then trailing amount.
@@ -108,6 +115,7 @@ class ParsedItem:
     serving: str | None = None
     detail: str | None = None
     discount_percent: float | None = None
+    discount_label: str | None = None
 
 
 @dataclass
@@ -172,6 +180,21 @@ def classify(description: str, detail: str | None = None) -> str:
     # Founders discount applies to wine and beer only, so an unrecognised
     # discounted pour is far more likely wine than anything else.
     return "wine"
+
+
+def explicit_category(*parts: str | None) -> str | None:
+    """wine/beer only when something actually says so, else None.
+
+    classify() falls back to "wine" for anything it cannot place, which is fine
+    once a line is known to be a member discount but far too loose for deciding
+    whether an unfamiliar discount should count in the first place.
+    """
+    haystack = " ".join(part for part in parts if part).lower()
+    if any(hint in haystack for hint in BEER_HINTS):
+        return "beer"
+    if any(hint in haystack for hint in WINE_HINTS):
+        return "wine"
+    return None
 
 
 def _clean_lines(text: str) -> list[str]:
@@ -253,7 +276,9 @@ def extract_text(pdf_path: str | Path) -> str:
 # --------------------------------------------------------------------------
 
 
-def parse_text(text: str) -> ParsedReceipt:
+def parse_text(
+    text: str, member_percent: float = DEFAULT_MEMBER_PERCENT
+) -> ParsedReceipt:
     lines = _clean_lines(text)
     if not lines:
         raise ReceiptParseError("receipt appears to be empty")
@@ -316,21 +341,25 @@ def parse_text(text: str) -> ParsedReceipt:
     # --- line items -------------------------------------------------------
     start_index = (dt_index + 1) if dt_index is not None else 0
     body = lines[start_index:end_index]
-    receipt.items = _parse_items(body, receipt.warnings)
+    receipt.items = _parse_items(body, receipt.warnings, member_percent)
 
     if not receipt.items:
         receipt.warnings.append("No line items were found on this receipt.")
     elif not receipt.qualifying_items:
         receipt.warnings.append(
-            "No 'Discount: founders (50%)' lines found, so nothing on this "
-            "receipt counts toward breakeven."
+            f"Nothing on this receipt carries the {member_percent:g}% member "
+            "discount, so none of it counts toward breakeven yet."
         )
 
     _check_consistency(receipt)
     return receipt
 
 
-def _parse_items(body: list[str], warnings: list[str]) -> list[ParsedItem]:
+def _parse_items(
+    body: list[str],
+    warnings: list[str],
+    member_percent: float = DEFAULT_MEMBER_PERCENT,
+) -> list[ParsedItem]:
     """Split the item region into blocks headed by a '<description> $<amount>' line."""
     blocks: list[tuple[str, int, list[str]]] = []
     for line in body:
@@ -357,6 +386,7 @@ def _parse_items(body: list[str], warnings: list[str]) -> list[ParsedItem]:
         reg_cents = None
         discount_cents = 0
         discount_percent = None
+        discount_label = None
         qualifying = False
 
         for line in detail_lines:
@@ -368,16 +398,40 @@ def _parse_items(body: list[str], warnings: list[str]) -> list[ParsedItem]:
             founders = RE_FOUNDERS.search(line)
             if founders:
                 qualifying = True
+                discount_label = "founders"
                 discount_percent = float(founders.group(1))
                 discount_cents += to_cents(founders.group(2))
                 continue
 
             other = RE_ANY_DISCOUNT.search(line)
             if other:
-                warnings.append(
-                    f"{desc!r} has a non-founders discount "
-                    f"({other.group(1).strip()}); it does not count toward breakeven."
+                label = other.group(1).strip()
+                amount = to_cents(other.group(2))
+                rate = RE_LABEL_PERCENT.search(label)
+                percent = float(rate.group(1)) if rate else None
+
+                # Keep the money whatever the label says. A discount we do not
+                # recognise is still a discount, and the review screen offers a
+                # tick box — which is useless if the amount was thrown away.
+                discount_cents += amount
+                discount_label = label
+                if percent is not None:
+                    discount_percent = percent
+
+                drink = explicit_category(label, desc, " ".join(detail_lines))
+                at_member_rate = (
+                    percent is not None and abs(percent - member_percent) < 0.01
                 )
+                if at_member_rate and drink:
+                    # The membership rate off a wine or a beer is the membership
+                    # benefit, whatever Square chose to call it on the day.
+                    qualifying = True
+                else:
+                    warnings.append(
+                        f"{desc!r} has a {label!r} discount, which is not the "
+                        f"{member_percent:g}% member rate on wine or beer. Tick it "
+                        f"on the review screen if it should still count."
+                    )
 
         if reg_cents is None:
             reg_cents = paid_cents + discount_cents
@@ -392,12 +446,17 @@ def _parse_items(body: list[str], warnings: list[str]) -> list[ParsedItem]:
             ParsedItem(
                 description=desc,
                 reg_price_cents=reg_cents,
-                discount_cents=discount_cents if qualifying else 0,
+                discount_cents=discount_cents,
                 paid_cents=paid_cents,
                 qualifying=qualifying,
-                category=classify(desc, detail) if qualifying else "other",
+                category=(
+                    classify(desc, detail)
+                    if qualifying
+                    else (explicit_category(discount_label, desc, detail) or "other")
+                ),
                 serving=_find_serving(detail_lines),
                 detail=detail,
+                discount_label=discount_label,
                 discount_percent=discount_percent,
             )
         )
@@ -425,5 +484,7 @@ def _check_consistency(receipt: ParsedReceipt) -> None:
             )
 
 
-def parse_pdf(pdf_path: str | Path) -> ParsedReceipt:
-    return parse_text(extract_text(pdf_path))
+def parse_pdf(
+    pdf_path: str | Path, member_percent: float = DEFAULT_MEMBER_PERCENT
+) -> ParsedReceipt:
+    return parse_text(extract_text(pdf_path), member_percent)

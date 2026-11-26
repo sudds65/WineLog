@@ -144,6 +144,11 @@ def cmd_seed(args: argparse.Namespace) -> None:
 
 def cmd_import(args: argparse.Namespace) -> None:
     db.init_db()
+    with db.get_conn() as conn:
+        try:
+            member_percent = float(db.get_settings(conn).get("discount_percent") or 50.0)
+        except (TypeError, ValueError):
+            member_percent = 50.0
     paths: list[Path] = []
     for raw in args.pdf:
         path = Path(raw)
@@ -160,7 +165,7 @@ def cmd_import(args: argparse.Namespace) -> None:
     for path in paths:
         print(f"\n{path.name}")
         try:
-            parsed = parse_pdf(path)
+            parsed = parse_pdf(path, member_percent)
         except ReceiptParseError as exc:
             print(f"  ! {exc}")
             continue

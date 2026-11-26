@@ -949,8 +949,8 @@
                <input class="input" type="date" id="review-date" value="${todayISO()}"></label>`
       }
       <p class="hint" style="margin:10px 0 8px">
-        Ticked lines carry the founders discount and count toward breakeven.
-        Untick anything that shouldn't.
+        Ticked lines count toward breakeven. Tick anything else that was a
+        member discount, and untick anything that wasn't.
       </p>
       ${items
         .map(
@@ -961,7 +961,15 @@
             <span class="row__title">${esc(item.description)}</span>
             <span class="row__meta">
               ${item.serving ? `<span class="pill">${esc(item.serving)}</span>` : ""}
-              ${item.qualifying ? `<span class="pill pill--${esc(item.category)}">${esc(item.category)}</span>` : '<span class="pill pill--muted">no member discount</span>'}
+              ${
+                item.qualifying
+                  ? `<span class="pill pill--${esc(item.category)}">${esc(item.category)}</span>`
+                  : `<span class="pill pill--muted">${
+                      item.discount_cents
+                        ? esc(item.discount_label || "other discount")
+                        : "no discount"
+                    }</span>`
+              }
               <span>${money(item.reg_price_cents)} list · paid ${money(item.paid_cents)}</span>
             </span>
           </span>
@@ -1033,10 +1041,10 @@
           items: parsed.items.map((item) => ({
             description: item.description,
             detail: item.detail,
-            category: item.qualifying ? item.category : "other",
+            category: item.category,
             serving: item.serving,
             reg_price_cents: item.reg_price_cents,
-            discount_cents: item.qualifying ? item.discount_cents : 0,
+            discount_cents: item.discount_cents,
             paid_cents: item.paid_cents,
             qualifying: item.qualifying,
           })),

@@ -313,6 +313,15 @@ def remove_receipt(
         return {"ok": True, "stats": service.stats(conn)}
 
 
+def _member_percent() -> float:
+    """The membership rate from Settings — what a discount must match to count."""
+    with db.get_conn() as conn:
+        try:
+            return float(db.get_settings(conn).get("discount_percent") or 50.0)
+        except (TypeError, ValueError):
+            return 50.0
+
+
 @app.post("/api/receipts/parse")
 async def parse_receipt(
     file: Annotated[UploadFile, File()],
@@ -338,7 +347,7 @@ async def parse_receipt(
     staged.write_bytes(payload)
 
     try:
-        parsed = parse_pdf(staged)
+        parsed = parse_pdf(staged, _member_percent())
     except ReceiptParseError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
 

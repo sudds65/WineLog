@@ -194,6 +194,25 @@ def test_receipt_keeps_the_food_line_for_context(auth_client):
     assert receipt["saved_cents"] == 1550
 
 
+def test_a_ticked_non_founders_line_counts(auth_client):
+    """What the review screen sends after you tick a retail-wine discount."""
+    body = dict(RECEIPT_BODY)
+    body["receipt_no"] = "wfiR"
+    body["items"] = [
+        {
+            "description": "2006 Michel Mailliard Brut",
+            "category": "wine",
+            "reg_price_cents": 19200,
+            "discount_cents": 9600,
+            "paid_cents": 9600,
+            "qualifying": True,
+        }
+    ]
+    stats = auth_client.post("/api/receipts", json=body).json()["stats"]
+    assert stats["saved_cents"] == 9600
+    assert stats["pre_discount_cents"] == 19200
+
+
 def test_same_receipt_number_is_rejected(auth_client):
     assert auth_client.post("/api/receipts", json=RECEIPT_BODY).status_code == 201
     duplicate = auth_client.post("/api/receipts", json=RECEIPT_BODY)
